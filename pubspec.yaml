@@ -1,0 +1,54 @@
+name: vibetech_xyz
+description: Aplikasi Penjualan VPS, Sewa Bot WhatsApp, dan Panel Hosting
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  firebase_core:
+  firebase_auth:
+  cloud_firestore:
+  firebase_database:
+  google_generative_ai: ^0.4.7
+  google_sign_in: 6.2.2
+  sqflite: ^2.4.3
+  sqflite_common_ffi: ^2.3.4+4
+  path: ^1.9.1
+  google_fonts: ^8.2.1
+  url_launcher: ^6.3.0
+  local_auth: ^3.0.2
+  qr_flutter: ^4.1.0
+  cupertino_icons: ^1.0.2
+  flutter_express: ^0.8.4
+  hugeicons: ^1.1.7
+  lottie: ^3.5.1
+  intl: ^0.18.1
+  webview_flutter: ^4.14.1
+  webview_flutter_android: ^4.1.0
+  http: ^1.6.0
+  shared_preferences: ^2.5.5
+  mailer: ^6.1.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/icon/logo.png"
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/images/
+    - assets/animation/
+    - assets/icon/
+    - assets/ss_vibetech/

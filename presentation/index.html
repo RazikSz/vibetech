@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VibeTech XYZ - Presentation Deck (16 Slides)</title>
+  
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Background Canvas & Glows -->
+  <canvas id="particles-canvas"></canvas>
+  <div class="ambient-glow glow-1"></div>
+  <div class="ambient-glow glow-2"></div>
+  <div class="ambient-glow glow-3"></div>
+
+  <!-- Presentation Main Viewport -->
+  <div class="presentation-viewport">
+
+    <!-- Top Header Bar -->
+    <header class="deck-header">
+      <div class="brand-badge">
+        <div class="brand-logo">
+          <i class="fas fa-server"></i>
+        </div>
+        <div>
+          <div class="brand-title">VibeTech XYZ</div>
+          <span class="brand-tag">v2.0.0 • Cloud & AI Ecosystem</span>
+        </div>
+      </div>
+
+      <div class="header-controls">
+        <div class="slide-counter">
+          Slide <span id="current-slide-num">1</span> / <span id="total-slide-num">16</span>
+        </div>
+        <button id="btn-drawer" class="btn-icon" title="Daftar Slide (G)"><i class="fas fa-th-large"></i></button>
+        <button id="btn-notes" class="btn-icon" title="Speaker Notes (N)"><i class="fas fa-sticky-note"></i></button>
+        <button id="btn-fullscreen" class="btn-icon" title="Fullscreen (F)"><i class="fas fa-expand"></i></button>
+      </div>
+    </header>
+
+    <!-- Slides Stage -->
+    <main class="deck-stage">
+
+      <!-- ====================================================================
+           SLIDE 1: COVER & HERO
+           ==================================================================== -->
+      <section class="slide active" id="slide-1">
+        <div class="slide-hero">
+          <div class="hero-pill anim-float">
+            <i class="fas fa-bolt"></i> Next-Gen Cloud Hosting & Server Ecosystem
+          </div>
+          <h1 class="hero-main-title">
+            <span class="hero-gradient">VIBETECH XYZ</span><br>
+            Infrastructure & Automated Services
+          </h1>
+          <p class="hero-tagline">
+            Platform modern penjualan Cloud VPS, Panel Hosting Pterodactyl, Sewa Bot WhatsApp, 
+            dan Asisten AI Teatrikal Furina yang terintegrasi dengan Payment Gateway & Database SQLite.
+          </p>
+
+          <div class="badge-group">
+            <div class="tech-badge"><i class="fab fa-flutter"></i> Flutter 3.x (Dart)</div>
+            <div class="tech-badge"><i class="fas fa-database"></i> SQLite Offline-First</div>
+            <div class="tech-badge"><i class="fab fa-node-js"></i> Node.js Express ESM</div>
+            <div class="tech-badge"><i class="fas fa-robot"></i> Furina Gemini AI Engine</div>
+            <div class="tech-badge"><i class="fas fa-credit-card"></i> Midtrans Snap & Saldo</div>
+          </div>
+
+          <div style="margin-top: 32px; font-size: 0.95rem; color: var(--text-secondary);">
+            Lead Developer & Director: <strong style="color: var(--cyan);">Raziek</strong>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 2: PROPOSAL AWAL & LATAR BELAKANG
+           ==================================================================== -->
+      <section class="slide" id="slide-2">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-file-alt"></i> Proposal Awal & Visi</div>
+          <h2 class="slide-title">Melanjutkan Ide dari <span>Proposal Awal</span></h2>
+          <p class="slide-subtitle">Mewujudkan visi digitalisasi cloud hosting menjadi aplikasi mobile yang modern, cepat, dan mandiri.</p>
+        </div>
+
+        <div class="slide-grid-2">
+          <div class="glass-card">
+            <h3 style="color: var(--primary-light); font-size: 1.15rem; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+              <i class="fas fa-lightbulb"></i> Visi Dasar Proposal
+            </h3>
+            <ul class="feature-list">
+              <li class="feature-item">
+                <div class="feature-icon"><i class="fas fa-store"></i></div>
+                <div>
+                  <div class="feature-title">Toko Digital Layanan Server</div>
+                  <div class="feature-desc">Menyediakan katalog terpusat untuk pembelian paket VPS dan game hosting tanpa birokrasi manual.</div>
+                </div>
+              </li>
+              <li class="feature-item">
+                <div class="feature-icon"><i class="fas fa-gamepad"></i></div>
+                <div>
+                  <div class="feature-title">Kemudahan Akses Bagi Komunitas</div>
+                  <div class="feature-desc">Memberikan solusi sewa server Pterodactyl dan Bot WhatsApp siap pakai dengan harga terjangkau.</div>
+                </div>
+              </li>
+              <li class="feature-item">
+                <div class="feature-icon"><i class="fas fa-receipt"></i></div>
+                <div>
+                  <div class="feature-title">Pencatatan Transaksi Digital</div>
+                  <div class="feature-desc">Mencatat riwayat invoice dan status pesanan agar pengguna dapat melacak masa aktif layanan.</div>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="glass-card card-highlight">
+            <h3 style="color: var(--cyan); font-size: 1.15rem; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+              <i class="fas fa-rocket"></i> Realisasi Versi 2.0.0
+            </h3>
+            <ul class="feature-list">
+              <li class="feature-item">
+                <div class="feature-icon cyan"><i class="fas fa-mobile-alt"></i></div>
+                <div>
+                  <div class="feature-title">Aplikasi Mobile Offline-First</div>
+                  <div class="feature-desc">Menggunakan basis Flutter dan SQLite sehingga data akun & kredensial server dapat diakses offline.</div>
+                </div>
+              </li>
+              <li class="feature-item">
+                <div class="feature-icon cyan"><i class="fas fa-wallet"></i></div>
+                <div>
+                  <div class="feature-title">Dompet Digital VibeWallet</div>
+                  <div class="feature-desc">Sistem saldo internal yang memangkas waktu checkout menjadi 1 detik saja tanpa gateway eksternal.</div>
+                </div>
+              </li>
+              <li class="feature-item">
+                <div class="feature-icon cyan"><i class="fas fa-robot"></i></div>
+                <div>
+                  <div class="feature-title">Asisten Cerdas Terintegrasi DB</div>
+                  <div class="feature-desc">Furina AI karya Raziek yang dapat menjawab kontak WhatsApp (0878-8587-3325) dan sisa saldo user.</div>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 3: PERUBAHAN ARAH (PIVOT)
+           ==================================================================== -->
+      <section class="slide" id="slide-3">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-random"></i> Evolusi Produk</div>
+          <h2 class="slide-title">Perubahan Arah <span>(Pivot) dari Ide Awal</span></h2>
+          <p class="slide-subtitle">Bagaimana VibeTech bertransformasi dari katalog toko statis menjadi ekosistem otomasi cloud pintar.</p>
+        </div>
+
+        <div class="slide-grid-4">
+          <div class="glass-card" style="border-top: 4px solid var(--primary);">
+            <div class="feature-icon" style="margin-bottom: 10px;"><i class="fas fa-bolt"></i></div>
+            <h4 style="font-size: 1.05rem; color: var(--primary-light); margin-bottom: 6px;">1. Auto-Provisioning</h4>
+            <p style="font-size: 0.8rem; color: var(--crimson); margin-bottom: 4px;">❌ <strong>Sebelumnya:</strong> Setup server manual via email/chat admin.</p>
+            <p style="font-size: 0.8rem; color: var(--emerald);">✅ <strong>Pivot:</strong> Kredensial root SSH & node Pterodactyl terbit instan di SQLite.</p>
+          </div>
+
+          <div class="glass-card" style="border-top: 4px solid var(--cyan);">
+            <div class="feature-icon cyan" style="margin-bottom: 10px;"><i class="fas fa-credit-card"></i></div>
+            <h4 style="font-size: 1.05rem; color: var(--cyan); margin-bottom: 6px;">2. Dual Checkout</h4>
+            <p style="font-size: 0.8rem; color: var(--crimson); margin-bottom: 4px;">❌ <strong>Sebelumnya:</strong> Hanya transfer bank manual konvensional.</p>
+            <p style="font-size: 0.8rem; color: var(--emerald);">✅ <strong>Pivot:</strong> Saldo VibeWallet 1-klik + Midtrans Snap (QRIS & VA Bank).</p>
+          </div>
+
+          <div class="glass-card" style="border-top: 4px solid var(--accent);">
+            <div class="feature-icon accent" style="margin-bottom: 10px;"><i class="fas fa-theater-masks"></i></div>
+            <h4 style="font-size: 1.05rem; color: var(--accent); margin-bottom: 6px;">3. Theatrical AI</h4>
+            <p style="font-size: 0.8rem; color: var(--crimson); margin-bottom: 4px;">❌ <strong>Sebelumnya:</strong> Chatbot form kaku tanpa live context.</p>
+            <p style="font-size: 0.8rem; color: var(--emerald);">✅ <strong>Pivot:</strong> Furina AI karya Raziek dengan injeksi data database live.</p>
+          </div>
+
+          <div class="glass-card" style="border-top: 4px solid var(--emerald);">
+            <div class="feature-icon green" style="margin-bottom: 10px;"><i class="fas fa-fingerprint"></i></div>
+            <h4 style="font-size: 1.05rem; color: var(--emerald); margin-bottom: 6px;">4. Hardware Security</h4>
+            <p style="font-size: 0.8rem; color: var(--crimson); margin-bottom: 4px;">❌ <strong>Sebelumnya:</strong> Login username/password standar.</p>
+            <p style="font-size: 0.8rem; color: var(--emerald);">✅ <strong>Pivot:</strong> Biometrik Fingerprint/Face ID & 2FA PIN sebelum transaksi.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 4: SCREENSHOTS PART 1 (DASHBOARD, PRODUK & PEMBAYARAN)
+           ==================================================================== -->
+      <section class="slide" id="slide-4">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-images"></i> Screenshot Fitur Utama (Part 1)</div>
+          <h2 class="slide-title">Tampilan Antarmuka <span>(1. Dashboard, 2. Produk, 3. Pembayaran)</span></h2>
+          <p class="slide-subtitle">Tangkapan layar antarmuka pengguna pada modul interactive dashboard &amp; saldo dompet, katalog cloud server, dan pembayaran instan VibeWallet.</p>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 10px;">
+          <!-- Screen 1 -->
+          <div class="glass-card" style="padding: 14px; display: flex; flex-direction: column; align-items: center; border-top: 3px solid var(--cyan);">
+            <img src="screenshots/Dashboard.png" alt="Interactive Dashboard" style="width: 100%; max-height: 380px; object-fit: contain; border-radius: 14px; margin-bottom: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);" />
+            <h4 style="color: var(--cyan); font-size: 1.05rem; margin-bottom: 4px; text-align: center;">1. Interactive Dashboard</h4>
+            <p style="font-size: 0.82rem; color: var(--text-secondary); text-align: center; line-height: 1.4;">
+              Pusat kendali pengguna: kartu saldo VibeWallet Rp 10 Juta, Quick Action 4-grid akses produk server, dan banner Portal Admin.
+            </p>
+          </div>
+
+          <!-- Screen 2 -->
+          <div class="glass-card" style="padding: 14px; display: flex; flex-direction: column; align-items: center; border-top: 3px solid var(--primary);">
+            <img src="screenshots/Produk.png" alt="Katalog Produk" style="width: 100%; max-height: 380px; object-fit: contain; border-radius: 14px; margin-bottom: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);" />
+            <h4 style="color: var(--primary-light); font-size: 1.05rem; margin-bottom: 4px; text-align: center;">2. Produk Cloud &amp; Server</h4>
+            <p style="font-size: 0.82rem; color: var(--text-secondary); text-align: center; line-height: 1.4;">
+              Katalog Cloud VPS KVM, Panel Pterodactyl SG &amp; Bot WA dengan filter kategori chip dan tombol '+ Keranjang'.
+            </p>
+          </div>
+
+          <!-- Screen 3 -->
+          <div class="glass-card" style="padding: 14px; display: flex; flex-direction: column; align-items: center; border-top: 3px solid var(--emerald);">
+            <img src="screenshots/Pembayaran.png" alt="Sistem Pembayaran" style="width: 100%; max-height: 380px; object-fit: contain; border-radius: 14px; margin-bottom: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);" />
+            <h4 style="color: var(--emerald); font-size: 1.05rem; margin-bottom: 4px; text-align: center;">3. Pembayaran VibeWallet</h4>
+            <p style="font-size: 0.82rem; color: var(--text-secondary); text-align: center; line-height: 1.4;">
+              Dual checkout saldo internal 1-detik, proteksi verifikasi PIN 2FA 6-digit &amp; rincian potongan kupon diskon.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 5: SCREENSHOTS PART 2 (KERANJANG, PROFIL & DATA KREDENSIAL)
+           ==================================================================== -->
+      <section class="slide" id="slide-5">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-images"></i> Screenshot Fitur Utama (Part 2)</div>
+          <h2 class="slide-title">Tampilan Antarmuka <span>(4. Keranjang, 5. Profil, 6. Data Kredensial)</span></h2>
+          <p class="slide-subtitle">Tangkapan layar antarmuka pengguna pada modul keranjang diskon promo, profil keamanan 2FA, dan kontrol kredensial SQLite server aktif (Kartu Layanan).</p>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 10px;">
+          <!-- Screen 4 -->
+          <div class="glass-card" style="padding: 14px; display: flex; flex-direction: column; align-items: center; border-top: 3px solid var(--accent);">
+            <img src="screenshots/Keranjang.png" alt="Keranjang Belanja" style="width: 100%; max-height: 380px; object-fit: contain; border-radius: 14px; margin-bottom: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);" />
+            <h4 style="color: var(--accent); font-size: 1.05rem; margin-bottom: 4px; text-align: center;">4. Keranjang &amp; Diskon Promo</h4>
+            <p style="font-size: 0.82rem; color: var(--text-secondary); text-align: center; line-height: 1.4;">
+              Manajemen belanja multi-item dinamis, counter kuantitas produk (+/-), dan klaim kupon diskon 'CYBER30' (30%).
+            </p>
+          </div>
+
+          <!-- Screen 5 -->
+          <div class="glass-card" style="padding: 14px; display: flex; flex-direction: column; align-items: center; border-top: 3px solid var(--emerald);">
+            <img src="screenshots/Profil.png" alt="Profil Akun" style="width: 100%; max-height: 380px; object-fit: contain; border-radius: 14px; margin-bottom: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);" />
+            <h4 style="color: var(--emerald); font-size: 1.05rem; margin-bottom: 4px; text-align: center;">5. Profil &amp; Keamanan 2FA</h4>
+            <p style="font-size: 0.82rem; color: var(--text-secondary); text-align: center; line-height: 1.4;">
+              Identitas pengguna avatar &amp; role, pengaturan bahasa bilingual (ID/EN), proteksi sidik jari hardware &amp; logout sesi.
+            </p>
+          </div>
+
+          <!-- Screen 6 -->
+          <div class="glass-card" style="padding: 14px; display: flex; flex-direction: column; align-items: center; border-top: 3px solid #f59e0b;">
+            <img src="screenshots/Kartu_layanan.png" alt="Data Kredensial Server" style="width: 100%; max-height: 380px; object-fit: contain; border-radius: 14px; margin-bottom: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);" />
+            <h4 style="color: #f59e0b; font-size: 1.05rem; margin-bottom: 4px; text-align: center;">6. Data Kredensial Server</h4>
+            <p style="font-size: 0.82rem; color: var(--text-secondary); text-align: center; line-height: 1.4;">
+              Penyimpanan kredensial server aktif di SQLite lokal: IP publik, port SSH, username root, password terenkripsi &amp; masa aktif.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 6: FITUR UTAMA APLIKASI
+           ==================================================================== -->
+      <section class="slide" id="slide-6">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-cubes"></i> Fitur Inti</div>
+          <h2 class="slide-title">Fitur Utama <span>VibeTech XYZ</span></h2>
+          <p class="slide-subtitle">6 pilar fungsionalitas yang menggerakkan seluruh ekosistem layanan aplikasi.</p>
+        </div>
+
+        <div class="slide-grid-3">
+          <div class="glass-card">
+            <div class="feature-icon cyan" style="margin-bottom: 10px;"><i class="fas fa-th-large"></i></div>
+            <h4 style="color: var(--cyan); font-size: 1.05rem;">1. Interactive Dashboard</h4>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px;">
+              Pusat kontrol navigasi terpadu dengan kartu saldo VibeWallet Rp 10 Juta, Quick Action 4-grid, dan shortcut Portal Admin.
+            </p>
+          </div>
+
+          <div class="glass-card">
+            <div class="feature-icon" style="margin-bottom: 10px;"><i class="fas fa-box-open"></i></div>
+            <h4 style="color: var(--primary-light); font-size: 1.05rem;">2. Produk Cloud &amp; Server</h4>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px;">
+              Katalog terpusat untuk paket Cloud VPS KVM, Hosting Game Panel Pterodactyl SG, dan Sewa Bot WA dengan filter kategori.
+            </p>
+          </div>
+
+          <div class="glass-card">
+            <div class="feature-icon" style="margin-bottom: 10px; color: var(--emerald);"><i class="fas fa-bolt"></i></div>
+            <h4 style="color: var(--emerald); font-size: 1.05rem;">3. Pembayaran VibeWallet</h4>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px;">
+              Pelunasan 1-detik via saldo dompet internal VibeWallet dengan proteksi verifikasi PIN 2FA 6-digit &amp; auto-deduction.
+            </p>
+          </div>
+
+          <div class="glass-card">
+            <div class="feature-icon accent" style="margin-bottom: 10px;"><i class="fas fa-shopping-cart"></i></div>
+            <h4 style="color: var(--accent); font-size: 1.05rem;">4. Keranjang &amp; Diskon</h4>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px;">
+              Manajemen keranjang multi-item dinamis, kalkulasi subtotal otomatis, dan penerapan kupon diskon promo 30%.
+            </p>
+          </div>
+
+          <div class="glass-card">
+            <div class="feature-icon green" style="margin-bottom: 10px;"><i class="fas fa-user-shield"></i></div>
+            <h4 style="color: var(--emerald); font-size: 1.05rem;">5. Profil &amp; Keamanan</h4>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px;">
+              Pengaturan identitas akun pengguna, preferensi bahasa ID/EN, aktivasi keamanan biometrik sidik jari, dan kontrol sesi.
+            </p>
+          </div>
+
+          <div class="glass-card">
+            <div class="feature-icon" style="margin-bottom: 10px; color: var(--amber);"><i class="fas fa-key"></i></div>
+            <h4 style="color: #f59e0b; font-size: 1.05rem;">6. Data Kredensial</h4>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px;">
+              Penyimpanan lokal SQLite aman untuk IP publik, port SSH, username, root password server aktif, dan kontrol di Portal Admin.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 7: KEUNGGULAN KOMPETITIF
+           ==================================================================== -->
+      <section class="slide" id="slide-7">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-award"></i> Value Proposition</div>
+          <h2 class="slide-title">Keunggulan Kompetitif <span>VibeTech XYZ</span></h2>
+          <p class="slide-subtitle">Faktor pembeda utama yang menjadikan solusi VibeTech unggul di industri cloud hosting mobile.</p>
+        </div>
+
+        <div class="slide-grid-4">
+          <div class="glass-card" style="border-top: 4px solid var(--cyan);">
+            <div class="feature-icon cyan" style="margin-bottom: 12px;"><i class="fas fa-bolt"></i></div>
+            <h4 style="font-size: 1.05rem; color: var(--cyan); margin-bottom: 6px;">1. Otomasi 1 Detik</h4>
+            <p style="font-size: 0.82rem; color: var(--text-secondary); line-height: 1.4;">
+              Penerbitan kredensial server terjadi secara real-time begitu pesanan lunas tanpa harus menunggu respon manual admin.
+            </p>
+          </div>
+
+          <div class="glass-card" style="border-top: 4px solid var(--primary);">
+            <div class="feature-icon" style="margin-bottom: 12px;"><i class="fas fa-fingerprint"></i></div>
+            <h4 style="font-size: 1.05rem; color: var(--primary-light); margin-bottom: 6px;">2. Keamanan Biometrik</h4>
+            <p style="font-size: 0.82rem; color: var(--text-secondary); line-height: 1.4;">
+              Dilengkapi sensor sidik jari hardware dan PIN 6 digit untuk menjamin transaksi tidak dapat dieksekusi pihak ketiga.
+            </p>
+          </div>
+
+          <div class="glass-card" style="border-top: 4px solid var(--accent);">
+            <div class="feature-icon accent" style="margin-bottom: 12px;"><i class="fas fa-database"></i></div>
+            <h4 style="font-size: 1.05rem; color: var(--accent); margin-bottom: 6px;">3. AI Paham Database</h4>
+            <p style="font-size: 0.82rem; color: var(--text-secondary); line-height: 1.4;">
+              Furina AI membaca langsung sisa saldo pengguna, katalog produk aktif, dan nomor WhatsApp resmi developer.
+            </p>
+          </div>
+
+          <div class="glass-card" style="border-top: 4px solid var(--emerald);">
+            <div class="feature-icon green" style="margin-bottom: 12px;"><i class="fas fa-shield-alt"></i></div>
+            <h4 style="font-size: 1.05rem; color: var(--emerald); margin-bottom: 6px;">4. Offline Resilience</h4>
+            <p style="font-size: 0.82rem; color: var(--text-secondary); line-height: 1.4;">
+              Pengguna tetap dapat memeriksa data kredensial server dan riwayat transaksi saat tidak ada koneksi internet.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 8: SYSTEM ARCHITECTURE
+           ==================================================================== -->
+      <section class="slide" id="slide-8">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-sitemap"></i> High-Level Architecture</div>
+          <h2 class="slide-title">Arsitektur Sistem <span>End-to-End</span></h2>
+          <p class="slide-subtitle">Sinergi antara Flutter Client, SQLite Local DB, Express.js ESM, dan Engine AI Gemini.</p>
+        </div>
+
+        <div class="slide-grid-4">
+          <div class="glass-card">
+            <div class="feature-icon" style="width: 44px; height: 44px; font-size: 1.3rem; margin-bottom: 12px;"><i class="fab fa-flutter"></i></div>
+            <h4 style="font-size: 1.05rem; color: var(--primary-light); margin-bottom: 6px;">1. Client Layer</h4>
+            <p style="font-size: 0.82rem; color: var(--text-secondary); line-height: 1.4;">
+              Aplikasi Flutter multi-platform dengan State Management reaktif, otentikasi biometrik, dan tema Cyber-Neon.
+            </p>
+          </div>
+
+          <div class="glass-card">
+            <div class="feature-icon cyan" style="width: 44px; height: 44px; font-size: 1.3rem; margin-bottom: 12px;"><i class="fas fa-database"></i></div>
+            <h4 style="font-size: 1.05rem; color: var(--cyan); margin-bottom: 6px;">2. Local Storage</h4>
+            <p style="font-size: 0.82rem; color: var(--text-secondary); line-height: 1.4;">
+              SQLite Database Engine (SQFlite) untuk persistensi lokal data pengguna, produk, riwayat order, dan kredensial.
+            </p>
+          </div>
+
+          <div class="glass-card">
+            <div class="feature-icon accent" style="width: 44px; height: 44px; font-size: 1.3rem; margin-bottom: 12px;"><i class="fab fa-node-js"></i></div>
+            <h4 style="font-size: 1.05rem; color: var(--accent); margin-bottom: 6px;">3. Backend ESM</h4>
+            <p style="font-size: 0.82rem; color: var(--text-secondary); line-height: 1.4;">
+              Express.js REST API dengan modul ES6, CORS handler, Midtrans Snap Payment SDK, dan modul scraper Furina AI.
+            </p>
+          </div>
+
+          <div class="glass-card">
+            <div class="feature-icon green" style="width: 44px; height: 44px; font-size: 1.3rem; margin-bottom: 12px;"><i class="fas fa-brain"></i></div>
+            <h4 style="font-size: 1.05rem; color: var(--emerald); margin-bottom: 6px;">4. AI & Payment API</h4>
+            <p style="font-size: 0.82rem; color: var(--text-secondary); line-height: 1.4;">
+              Midtrans Core Gateway + PuruBoy Gemini v2 AI Engine dengan intelligent direct fallback jika backend offline.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 9: ALUR DATABASE (5 TAHAP)
+           ==================================================================== -->
+      <section class="slide" id="slide-9">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-project-diagram"></i> Database Lifecycle Flow</div>
+          <h2 class="slide-title">Siklus Alur Data <span>(Database Flow)</span></h2>
+          <p class="slide-subtitle">Bagaimana data mengalir dari registrasi hingga penerbitan kredensial server dan query AI.</p>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;">
+          <div class="glass-card" style="padding: 14px; border-top: 3px solid var(--primary);">
+            <div style="font-size: 1.3rem; margin-bottom: 6px;">1️⃣</div>
+            <div style="font-size: 0.75rem; color: var(--accent); font-weight: 700;">TAHAP 1</div>
+            <h4 style="font-size: 0.95rem; color: #fff; margin: 4px 0 6px;">Auth & User</h4>
+            <p style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">
+              User mendaftar -> Tersimpan di tabel <code>users</code> -> Saldo awal & password terenkripsi.
+            </p>
+          </div>
+
+          <div class="glass-card" style="padding: 14px; border-top: 3px solid var(--cyan);">
+            <div style="font-size: 1.3rem; margin-bottom: 6px;">2️⃣</div>
+            <div style="font-size: 0.75rem; color: var(--cyan); font-weight: 700;">TAHAP 2</div>
+            <h4 style="font-size: 0.95rem; color: #fff; margin: 4px 0 6px;">Katalog & Cart</h4>
+            <p style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">
+              Query paket dari tabel <code>products</code> -> Ditampung di singleton <code>CartService</code>.
+            </p>
+          </div>
+
+          <div class="glass-card" style="padding: 14px; border-top: 3px solid var(--accent);">
+            <div style="font-size: 1.3rem; margin-bottom: 6px;">3️⃣</div>
+            <div style="font-size: 0.75rem; color: var(--accent); font-weight: 700;">TAHAP 3</div>
+            <h4 style="font-size: 0.95rem; color: #fff; margin: 4px 0 6px;">Checkout Order</h4>
+            <p style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">
+              Deduksi saldo VibeWallet / Snap Midtrans -> Ledger dicatat di tabel <code>transactions</code>.
+            </p>
+          </div>
+
+          <div class="glass-card" style="padding: 14px; border-top: 3px solid var(--emerald);">
+            <div style="font-size: 1.3rem; margin-bottom: 6px;">4️⃣</div>
+            <div style="font-size: 0.75rem; color: var(--emerald); font-weight: 700;">TAHAP 4</div>
+            <h4 style="font-size: 0.95rem; color: #fff; margin: 4px 0 6px;">Auto Provision</h4>
+            <p style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">
+              Kredensial IP, root SSH, & Panel terbit instan di tabel <code>purchased_services</code>.
+            </p>
+          </div>
+
+          <div class="glass-card" style="padding: 14px; border-top: 3px solid var(--primary-light);">
+            <div style="font-size: 1.3rem; margin-bottom: 6px;">5️⃣</div>
+            <div style="font-size: 0.75rem; color: var(--primary-light); font-weight: 700;">TAHAP 5</div>
+            <h4 style="font-size: 0.95rem; color: #fff; margin: 4px 0 6px;">AI Context Query</h4>
+            <p style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">
+              Furina AI membaca langsung saldo & produk aktif untuk menjawab percakapan pengguna.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 10: SKEMA DATABASE SQLITE
+           ==================================================================== -->
+      <section class="slide" id="slide-10">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-table"></i> Database & Persistence</div>
+          <h2 class="slide-title">Skema Database <span>SQLite (SQFlite)</span></h2>
+          <p class="slide-subtitle">Struktur tabel relasional untuk mengelola akun pengguna, katalog layanan, transaksi, dan kredensial aktif.</p>
+        </div>
+
+        <div class="slide-grid-2">
+          <div class="glass-card">
+            <h4 style="color: var(--cyan); margin-bottom: 12px; font-size: 1.05rem;"><i class="fas fa-cubes"></i> Tabel Utama Database</h4>
+            <ul class="feature-list">
+              <li class="feature-item">
+                <div class="feature-icon cyan"><i class="fas fa-users"></i></div>
+                <div>
+                  <div class="feature-title">users</div>
+                  <div class="feature-desc">Menyimpan nama, email, password hash (SHA-256), saldo VibeWallet, dan PIN 2FA biometrik.</div>
+                </div>
+              </li>
+              <li class="feature-item">
+                <div class="feature-icon cyan"><i class="fas fa-box"></i></div>
+                <div>
+                  <div class="feature-title">products</div>
+                  <div class="feature-desc">Katalog paket Cloud VPS, Panel Pterodactyl SG, dan Bot WA dengan atribut harga, stok, dan deskripsi.</div>
+                </div>
+              </li>
+              <li class="feature-item">
+                <div class="feature-icon cyan"><i class="fas fa-receipt"></i></div>
+                <div>
+                  <div class="feature-title">transactions</div>
+                  <div class="feature-desc">Ledger riwayat order: invoice_no, total_harga, status pembayaran, payment_method, dan tanggal.</div>
+                </div>
+              </li>
+              <li class="feature-item">
+                <div class="feature-icon cyan"><i class="fas fa-server"></i></div>
+                <div>
+                  <div class="feature-title">purchased_services</div>
+                  <div class="feature-desc">Menyimpan IP publik, port SSH (22), username root, password, server_url, dan tanggal kedaluwarsa.</div>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="code-box">
+            <div class="code-header">
+              <div class="code-dots">
+                <div class="dot red"></div>
+                <div class="dot yellow"></div>
+                <div class="dot green"></div>
+              </div>
+              <div class="code-tabs">
+                <span class="code-tab active">database_helper.dart (Schema DDL)</span>
+              </div>
+            </div>
+            <pre class="code-body"><code><span class="syn-comm">// 1. Tabel Purchased Services (Kredensial Server)</span>
+<span class="syn-kw">await</span> db.execute(<span class="syn-str">'''
+  CREATE TABLE purchased_services (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_email TEXT NOT NULL,
+    nama_produk TEXT NOT NULL,
+    kategori TEXT NOT NULL,
+    harga REAL NOT NULL,
+    tanggal_beli TEXT NOT NULL,
+    tanggal_kadaluarsa TEXT NOT NULL,
+    status TEXT NOT NULL,
+    ip_address TEXT,
+    port TEXT,
+    username TEXT,
+    password TEXT,
+    server_url TEXT,
+    spesifikasi TEXT
+  )
+'''</span>);
+
+<span class="syn-comm">// 2. Tabel Users (Saldo VibeWallet & PIN)</span>
+<span class="syn-kw">await</span> db.execute(<span class="syn-str">'''
+  CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nama TEXT NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    password TEXT NOT NULL,
+    saldo REAL DEFAULT 10000000.0,
+    pin TEXT
+  )
+'''</span>);</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 11: PENJELASAN LENGKAP CRUD DATABASE
+           ==================================================================== -->
+      <section class="slide" id="slide-11">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-database"></i> Operasi Database</div>
+          <h2 class="slide-title">Penjelasan Lengkap <span>CRUD SQLite Engine</span></h2>
+          <p class="slide-subtitle">Matriks eksekusi Create, Read, Update, dan Delete yang menggerakkan seluruh fungsionalitas aplikasi.</p>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 10px;">
+          <!-- CREATE -->
+          <div class="glass-card" style="border: 1px solid var(--emerald); padding: 14px;">
+            <div style="font-size: 1.1rem; font-weight: 800; color: var(--emerald); margin-bottom: 8px;">
+              <i class="fas fa-plus-circle"></i> CREATE
+            </div>
+            <div style="font-family: var(--font-mono); font-size: 0.76rem; background: #000; padding: 8px; border-radius: 6px; color: #fff; margin-bottom: 8px;">
+              • createProduct()<br>
+              • createTransaction()<br>
+              • createPurchasedService()<br>
+              • createNotification()
+            </div>
+            <p style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">
+              Menyimpan produk baru, mencatat pesanan invoice checkout, menerbitkan kredensial server instan, dan alert notifikasi.
+            </p>
+          </div>
+
+          <!-- READ -->
+          <div class="glass-card" style="border: 1px solid var(--cyan); padding: 14px;">
+            <div style="font-size: 1.1rem; font-weight: 800; color: var(--cyan); margin-bottom: 8px;">
+              <i class="fas fa-search"></i> READ
+            </div>
+            <div style="font-family: var(--font-mono); font-size: 0.76rem; background: #000; padding: 8px; border-radius: 6px; color: #fff; margin-bottom: 8px;">
+              • getProducts()<br>
+              • getTransactionsByUser()<br>
+              • getPurchasedServices()<br>
+              • getUserWallet()
+            </div>
+            <p style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">
+              Memuat katalog produk dengan filter kategori instan, riwayat invoice pengguna, kredensial VPS aktif, dan saldo dompet.
+            </p>
+          </div>
+
+          <!-- UPDATE -->
+          <div class="glass-card" style="border: 1px solid var(--amber); padding: 14px;">
+            <div style="font-size: 1.1rem; font-weight: 800; color: var(--amber); margin-bottom: 8px;">
+              <i class="fas fa-edit"></i> UPDATE
+            </div>
+            <div style="font-family: var(--font-mono); font-size: 0.76rem; background: #000; padding: 8px; border-radius: 6px; color: #fff; margin-bottom: 8px;">
+              • updateProduct()<br>
+              • updateUserWallet()<br>
+              • updateTransaction()<br>
+              • renewService()
+            </div>
+            <p style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">
+              Mengubah harga/stok produk, deduksi atau top-up saldo VibeWallet, update status lunas, dan perpanjangan (+30 hari) server.
+            </p>
+          </div>
+
+          <!-- DELETE -->
+          <div class="glass-card" style="border: 1px solid var(--error); padding: 14px;">
+            <div style="font-size: 1.1rem; font-weight: 800; color: var(--error); margin-bottom: 8px;">
+              <i class="fas fa-trash-alt"></i> DELETE
+            </div>
+            <div style="font-family: var(--font-mono); font-size: 0.76rem; background: #000; padding: 8px; border-radius: 6px; color: #fff; margin-bottom: 8px;">
+              • deleteProduct(id)<br>
+              • deleteTransaction(id)<br>
+              • deletePurchasedService()<br>
+              • clearNotifications()
+            </div>
+            <p style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">
+              Menghapus katalog produk melalui dialog konfirmasi aman, pembersihan transaksi lama, dan pengosongan kotak notifikasi.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 12: MODUL KEAMANAN & BIOMETRIK
+           ==================================================================== -->
+      <section class="slide" id="slide-12">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-shield-alt"></i> Modul 1: Keamanan</div>
+          <h2 class="slide-title">Autentikasi & <span>Keamanan Multi-Layer</span></h2>
+          <p class="slide-subtitle">Perlindungan ganda menggunakan Biometrik Hardware, Fallback PIN 6-Digit, dan Session Persistence.</p>
+        </div>
+
+        <div class="slide-grid-2">
+          <div class="glass-card">
+            <h4 style="color: var(--accent); margin-bottom: 14px; font-size: 1.1rem;"><i class="fas fa-fingerprint"></i> Fitur Keamanan Tingkat Tinggi</h4>
+            <ul class="feature-list">
+              <li class="feature-item">
+                <div class="feature-icon accent"><i class="fas fa-fingerprint"></i></div>
+                <div>
+                  <div class="feature-title">LocalAuthentication Biometrics</div>
+                  <div class="feature-desc">Verifikasi sidik jari (Fingerprint) dan Face ID saat login dan sebelum memproses pembayaran checkout.</div>
+                </div>
+              </li>
+              <li class="feature-item">
+                <div class="feature-icon accent"><i class="fas fa-key"></i></div>
+                <div>
+                  <div class="feature-title">2FA PIN 6-Digit Security</div>
+                  <div class="feature-desc">Fallback keamanan jika perangkat tidak mendukung sensor biometrik atau verifikasi gagal.</div>
+                </div>
+              </li>
+              <li class="feature-item">
+                <div class="feature-icon accent"><i class="fas fa-lock"></i></div>
+                <div>
+                  <div class="feature-title">SHA-256 Password Hashing</div>
+                  <div class="feature-desc">Seluruh password tersimpan dalam bentuk hash kriptografis yang tidak dapat didekripsi langsung.</div>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="code-box">
+            <div class="code-header">
+              <div class="code-dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+              <div class="code-tabs"><span class="code-tab active">biometric_service.dart</span></div>
+            </div>
+            <pre class="code-body"><code><span class="syn-kw">final</span> LocalAuthentication _auth = <span class="syn-cls">LocalAuthentication</span>();
+
+<span class="syn-kw">Future</span>&lt;<span class="syn-cls">bool</span>&gt; <span class="syn-fn">authenticateWithBiometrics</span>() <span class="syn-kw">async</span> {
+  <span class="syn-kw">final</span> canCheck = <span class="syn-kw">await</span> _auth.canCheckBiometrics;
+  <span class="syn-kw">if</span> (!canCheck) <span class="syn-kw">return</span> <span class="syn-kw">true</span>; <span class="syn-comm">// Fallback PIN</span>
+
+  <span class="syn-kw">try</span> {
+    <span class="syn-kw">return await</span> _auth.<span class="syn-fn">authenticate</span>(
+      localizedReason: <span class="syn-str">'Otorisasi biometrik untuk transaksi VibeTech'</span>,
+      options: <span class="syn-kw">const</span> <span class="syn-cls">AuthenticationOptions</span>(
+        stickyAuth: <span class="syn-kw">true</span>,
+        biometricOnly: <span class="syn-kw">false</span>,
+      ),
+    );
+  } <span class="syn-kw">catch</span> (e) {
+    <span class="syn-kw">return false</span>;
+  }
+}</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 13: MODUL E-COMMERCE & CART
+           ==================================================================== -->
+      <section class="slide" id="slide-13">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-shopping-cart"></i> Modul 2: E-Commerce</div>
+          <h2 class="slide-title">Katalog Produk, <span>Keranjang & Manajemen Diskon</span></h2>
+          <p class="slide-subtitle">Sistem manajemen belanja terpadu dengan CartService berbasis ValueNotifier dan kupon diskon dinamis.</p>
+        </div>
+
+        <div class="slide-grid-2">
+          <div class="glass-card">
+            <h4 style="color: var(--cyan); margin-bottom: 14px; font-size: 1.1rem;"><i class="fas fa-tags"></i> Fungsionalitas E-Commerce</h4>
+            <ul class="feature-list">
+              <li class="feature-item">
+                <div class="feature-icon cyan"><i class="fas fa-layer-group"></i></div>
+                <div>
+                  <div class="feature-title">Multi-Category Filtering</div>
+                  <div class="feature-desc">Penyaringan instan antara Cloud VPS, Panel Pterodactyl SG, dan Sewa Bot WA tanpa jeda.</div>
+                </div>
+              </li>
+              <li class="feature-item">
+                <div class="feature-icon cyan"><i class="fas fa-cart-plus"></i></div>
+                <div>
+                  <div class="feature-title">CartService Reactive Notifier</div>
+                  <div class="feature-desc">Manajemen item belanja reaktif dengan penambahan unit, kalkulasi total otomatis, dan pembersihan keranjang.</div>
+                </div>
+              </li>
+              <li class="feature-item">
+                <div class="feature-icon cyan"><i class="fas fa-percentage"></i></div>
+                <div>
+                  <div class="feature-title">Promo Voucher & Discount Engine</div>
+                  <div class="feature-desc">Validasi kupon promo (contoh: VIBESERVER 30%) yang memotong harga subtotal secara otomatis.</div>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="code-box">
+            <div class="code-header">
+              <div class="code-dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+              <div class="code-tabs"><span class="code-tab active">cart_service.dart</span></div>
+            </div>
+            <pre class="code-body"><code><span class="syn-kw">class</span> <span class="syn-cls">CartService</span> {
+  <span class="syn-kw">static final</span> ValueNotifier&lt;List&lt;Map&lt;String, dynamic&gt;&gt;&gt; notifier =
+      ValueNotifier([]);
+
+  <span class="syn-kw">static void</span> <span class="syn-fn">addItem</span>(Map&lt;String, dynamic&gt; item) {
+    <span class="syn-kw">final</span> items = List&lt;Map&lt;String, dynamic&gt;&gt;.from(notifier.value);
+    <span class="syn-kw">final</span> name = (item[<span class="syn-str">'name'</span>] ?? item[<span class="syn-str">'nama'</span>] ?? item[<span class="syn-str">'title'</span>]).toString();
+    <span class="syn-kw">final</span> idx = items.<span class="syn-fn">indexWhere</span>((e) =&gt; e[<span class="syn-str">'name'</span>] == name);
+
+    <span class="syn-kw">if</span> (idx != -<span class="syn-num">1</span>) {
+      items[idx][<span class="syn-str">'quantity'</span>] += item[<span class="syn-str">'quantity'</span>] ?? <span class="syn-num">1</span>;
+    } <span class="syn-kw">else</span> {
+      items.<span class="syn-fn">add</span>({ ...item, <span class="syn-str">'name'</span>: name, <span class="syn-str">'title'</span>: name });
+    }
+    notifier.value = items;
+  }
+}</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 14: MODUL DUAL PAYMENT GATEWAY
+           ==================================================================== -->
+      <section class="slide" id="slide-14">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-credit-card"></i> Modul 3: Transaksi</div>
+          <h2 class="slide-title">Dual Payment Gateway <span>(Saldo & Midtrans)</span></h2>
+          <p class="slide-subtitle">Fleksibilitas pembayaran instan melalui Saldo VibeWallet atau Payment Gateway Midtrans Snap.</p>
+        </div>
+
+        <div class="slide-grid-2">
+          <div class="glass-card">
+            <h4 style="color: var(--cyan); margin-bottom: 14px; font-size: 1.1rem;"><i class="fas fa-route"></i> Alur Pembayaran Terintegrasi</h4>
+            <ul class="feature-list">
+              <li class="feature-item">
+                <div class="feature-icon cyan"><i class="fas fa-bolt"></i></div>
+                <div>
+                  <div class="feature-title">Opsi 1: Potong Saldo VibeWallet</div>
+                  <div class="feature-desc">Verifikasi saldo di SQLite -&gt; Deduksi instan dalam 1 detik -&gt; Kredensial server langsung terbit.</div>
+                </div>
+              </li>
+              <li class="feature-item">
+                <div class="feature-icon cyan"><i class="fas fa-qrcode"></i></div>
+                <div>
+                  <div class="feature-title">Opsi 2: Midtrans Snap Gateway</div>
+                  <div class="feature-desc">HTTP POST ke backend <code>/api/charge</code> -&gt; Buka Snap WebView -&gt; Bayar via QRIS / VA -&gt; Auto-polling status.</div>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="code-box">
+            <div class="code-header">
+              <div class="code-dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+              <div class="code-tabs"><span class="code-tab active">server.js (Midtrans Backend API)</span></div>
+            </div>
+            <pre class="code-body"><code><span class="syn-comm">// Endpoint Charge Transaksi Midtrans Snap</span>
+app.<span class="syn-fn">post</span>(<span class="syn-str">'/api/charge'</span>, <span class="syn-kw">async</span> (req, res) =&gt; {
+  <span class="syn-kw">const</span> { order_id, gross_amount, customer_details } = req.body;
+  <span class="syn-kw">const</span> parameter = {
+    transaction_details: { order_id, gross_amount },
+    customer_details,
+    enabled_payments: [<span class="syn-str">'qris'</span>, <span class="syn-str">'gopay'</span>, <span class="syn-str">'shopeepay'</span>, <span class="syn-str">'bca_va'</span>, <span class="syn-str">'bni_va'</span>]
+  };
+  <span class="syn-kw">const</span> transaction = <span class="syn-kw">await</span> snap.<span class="syn-fn">createTransaction</span>(parameter);
+  res.<span class="syn-fn">status</span>(<span class="syn-num">200</span>).<span class="syn-fn">json</span>({ redirect_url: transaction.redirect_url });
+});</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 15: MODUL AUTO-PROVISIONING SERVER
+           ==================================================================== -->
+      <section class="slide" id="slide-15">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-server"></i> Modul 4: Layanan Aktif</div>
+          <h2 class="slide-title">Automated Provisioning & <span>Server Manager</span></h2>
+          <p class="slide-subtitle">Generasi kredensial otomatis, peluncur panel Pterodactyl, tombol salin kredensial, dan countdown masa aktif.</p>
+        </div>
+
+        <div class="slide-grid-3">
+          <div class="glass-card">
+            <div class="feature-icon" style="margin-bottom: 12px;"><i class="fas fa-terminal"></i></div>
+            <h4 style="color: var(--primary-light); font-size: 1.1rem;">Kredensial VPS Instan</h4>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 6px;">
+              IP Public unik, Port SSH (22), Username (root), dan Password terenkripsi yang dapat dilihat & disalin dengan 1 ketukan.
+            </p>
+          </div>
+
+          <div class="glass-card">
+            <div class="feature-icon cyan" style="margin-bottom: 12px;"><i class="fas fa-external-link-alt"></i></div>
+            <h4 style="color: var(--cyan); font-size: 1.1rem;">Pterodactyl Panel Launcher</h4>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 6px;">
+              Tombol tautan langsung membuka Web Panel Node Singapore dengan kredensial akses yang telah disiapkan secara otomatis.
+            </p>
+          </div>
+
+          <div class="glass-card">
+            <div class="feature-icon green" style="margin-bottom: 12px;"><i class="fas fa-hourglass-half"></i></div>
+            <h4 style="color: var(--emerald); font-size: 1.1rem;">Expiry Countdown Timer</h4>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 6px;">
+              Indikator warna sisa masa aktif (Hijau &gt;14 hari, Kuning &lt;14 hari, Merah &lt;7 hari) dengan opsi perpanjang layanan.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 16: MODUL RIWAYAT TRANSAKSI & INVOICING
+           ==================================================================== -->
+      <section class="slide" id="slide-16">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-file-invoice-dollar"></i> Modul 5: Invoicing</div>
+          <h2 class="slide-title">Riwayat Transaksi & <span>Invoicing Digital</span></h2>
+          <p class="slide-subtitle">Pencatatan ledger keuangan, penomoran invoice standar, dan tanda terima digital terverifikasi.</p>
+        </div>
+
+        <div class="slide-grid-2">
+          <div class="glass-card">
+            <h4 style="color: var(--accent); margin-bottom: 14px; font-size: 1.1rem;"><i class="fas fa-receipt"></i> Struktur Invoicing Terintegrasi</h4>
+            <ul class="feature-list">
+              <li class="feature-item">
+                <div class="feature-icon accent"><i class="fas fa-barcode"></i></div>
+                <div>
+                  <div class="feature-title">Unique Invoice No Format</div>
+                  <div class="feature-desc">Format resmi <code>INV-YYYYMMDD-XXXXX</code> yang terhubung langsung dengan ID transaksi di database.</div>
+                </div>
+              </li>
+              <li class="feature-item">
+                <div class="feature-icon accent"><i class="fas fa-check-double"></i></div>
+                <div>
+                  <div class="feature-title">Status Tracking Badges</div>
+                  <div class="feature-desc">Visualisasi status real-time: Selesai (Lunas), Menunggu Pembayaran, dan Kedaluwarsa.</div>
+                </div>
+              </li>
+              <li class="feature-item">
+                <div class="feature-icon accent"><i class="fas fa-file-alt"></i></div>
+                <div>
+                  <div class="feature-title">Digital Receipt Modal</div>
+                  <div class="feature-desc">Rincian breakdown harga produk, PPN 0%, biaya admin, dan total pembayaran yang dapat dibagikan.</div>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="code-box">
+            <div class="code-header">
+              <div class="code-dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+              <div class="code-tabs"><span class="code-tab active">pembayaran_page.dart (Invoice Generator)</span></div>
+            </div>
+            <pre class="code-body"><code><span class="syn-comm">// Generasi Nomor Invoice Unik Standar</span>
+String <span class="syn-fn">_generateInvoiceNo</span>() {
+  <span class="syn-kw">final</span> now = DateTime.now();
+  <span class="syn-kw">final</span> dStr = <span class="syn-str">"\${now.year}\${now.month.toString().padLeft(2, '0')}\${now.day.toString().padLeft(2, '0')}"</span>;
+  <span class="syn-kw">final</span> rand = Random().nextInt(<span class="syn-num">89999</span>) + <span class="syn-num">10000</span>;
+  <span class="syn-kw">return</span> <span class="syn-str">"INV-\$dStr-\$rand"</span>;
+}</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 17: MODUL NOTIFIKASI & PENGATURAN
+           ==================================================================== -->
+      <section class="slide" id="slide-17">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-sliders-h"></i> Modul 6: Kustomisasi</div>
+          <h2 class="slide-title">Notifikasi, <span>Tema & Dukungan Multi-Bahasa</span></h2>
+          <p class="slide-subtitle">Pusat kendali preferensi pengguna untuk notifikasi in-app, switch tema Dark/Light, dan multi-bahasa.</p>
+        </div>
+
+        <div class="slide-grid-3">
+          <div class="glass-card">
+            <div class="feature-icon cyan" style="margin-bottom: 12px;"><i class="fas fa-bell"></i></div>
+            <h4 style="color: var(--cyan); font-size: 1.1rem;">In-App Notification Inbox</h4>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 6px;">
+              Notifikasi otomatis ketika pesanan sukses, saldo VibeWallet terpotong, atau server mendekati masa kedaluwarsa.
+            </p>
+          </div>
+
+          <div class="glass-card">
+            <div class="feature-icon" style="margin-bottom: 12px;"><i class="fas fa-adjust"></i></div>
+            <h4 style="color: var(--primary-light); font-size: 1.1rem;">Dark & Light Theme Switcher</h4>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 6px;">
+              Dukungan tema ganda: Cyber-Neon Dark Mode untuk dev & Clean Light Mode untuk keterbacaan tinggi.
+            </p>
+          </div>
+
+          <div class="glass-card">
+            <div class="feature-icon green" style="margin-bottom: 12px;"><i class="fas fa-globe"></i></div>
+            <h4 style="color: var(--emerald); font-size: 1.1rem;">Multi-Language (ID / EN)</h4>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 6px;">
+              Peralihan bahasa instan Bahasa Indonesia dan English menggunakan <code>LanguageService</code> tanpa restart aplikasi.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 18: MODUL FURINA AI ASSISTANT
+           ==================================================================== -->
+      <section class="slide" id="slide-18">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-theater-masks"></i> Modul 7: Kecerdasan Buatan</div>
+          <h2 class="slide-title">Furina AI & <span>Scraper ESM Integration</span></h2>
+          <p class="slide-subtitle">Diva Asisten Teatrikal karya Raziek dengan injeksi data real-time database dan auto-answer WhatsApp.</p>
+        </div>
+
+        <div class="slide-grid-2">
+          <div class="glass-card">
+            <h4 style="color: var(--accent); margin-bottom: 14px; font-size: 1.1rem;"><i class="fas fa-sparkles"></i> Keunggulan Furina AI VibeTech</h4>
+            <ul class="feature-list">
+              <li class="feature-item">
+                <div class="feature-icon accent"><i class="fas fa-user-astronaut"></i></div>
+                <div>
+                  <div class="feature-title">Persona Teatrikal Dramatis</div>
+                  <div class="feature-desc">Membawakan konsultasi teknis VPS & Panel dengan gaya elegan, suka dessert manis, dan bangga pada sutradara Raziek.</div>
+                </div>
+              </li>
+              <li class="feature-item">
+                <div class="feature-icon accent"><i class="fab fa-whatsapp"></i></div>
+                <div>
+                  <div class="feature-title">Auto-Answer Kontak Resmi</div>
+                  <div class="feature-desc">Secara otomatis memberikan nomor WhatsApp pembuat <strong>0878-8587-3325</strong> saat ditanya kontak CS/developer.</div>
+                </div>
+              </li>
+              <li class="feature-item">
+                <div class="feature-icon accent"><i class="fas fa-database"></i></div>
+                <div>
+                  <div class="feature-title">Real-Time App Context Injection</div>
+                  <div class="feature-desc">AI membaca langsung sisa saldo pengguna aktif dan katalog produk terkini dari SQLite database.</div>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="code-box">
+            <div class="code-header">
+              <div class="code-dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+              <div class="code-tabs"><span class="code-tab active">furina_scraper.js (ESM Module)</span></div>
+            </div>
+            <pre class="code-body"><code><span class="syn-kw">import</span> fetch <span class="syn-kw">from</span> <span class="syn-str">"node-fetch"</span>;
+<span class="syn-kw">export const</span> FURINA_DIRECTOR = <span class="syn-str">"Raziek"</span>;
+<span class="syn-kw">export const</span> FURINA_WHATSAPP = <span class="syn-str">"0878-8587-3325"</span>;
+
+<span class="syn-kw">export async function</span> <span class="syn-fn">askFurinaAI</span>({ text, sessionId, appContext }) {
+  <span class="syn-kw">const</span> history = sessions[sessionId].chat.<span class="syn-fn">slice</span>(-<span class="syn-num">8</span>).<span class="syn-fn">join</span>(<span class="syn-str">"\n"</span>);
+  <span class="syn-kw">const</span> finalPrompt = <span class="syn-str">`\${FURINA_SYSTEM_PROMPT}\n\${appContext}\n\${history}\nFurina:`</span>;
+  
+  <span class="syn-kw">const</span> res = <span class="syn-kw">await</span> <span class="syn-fn">fetch</span>(<span class="syn-str">"https://www.puruboy.kozow.com/api/ai/gemini-v2"</span>, {
+    method: <span class="syn-str">"POST"</span>,
+    headers: { <span class="syn-str">"Content-Type"</span>: <span class="syn-str">"application/json"</span> },
+    body: JSON.<span class="syn-fn">stringify</span>({ prompt: finalPrompt })
+  });
+  <span class="syn-kw">return</span> (<span class="syn-kw">await</span> res.<span class="syn-fn">json</span>())?.result?.answer;
+}</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 19: BACKEND API MATRIX
+           ==================================================================== -->
+      <section class="slide" id="slide-19">
+        <div class="slide-header">
+          <div class="slide-category"><i class="fas fa-network-wired"></i> REST API Matrix</div>
+          <h2 class="slide-title">Backend API <span>Microservices (Express ESM)</span></h2>
+          <p class="slide-subtitle">Daftar endpoint RESTful berkinerja tinggi yang menghubungkan Flutter Client dan Gateway eksternal.</p>
+        </div>
+
+        <div class="glass-card" style="padding: 16px;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 0.88rem; text-align: left;">
+            <thead>
+              <tr style="border-bottom: 1px solid var(--border-subtle); color: var(--cyan);">
+                <th style="padding: 12px;">Method</th>
+                <th style="padding: 12px;">Endpoint URL</th>
+                <th style="padding: 12px;">Fungsi & Peran</th>
+                <th style="padding: 12px;">Format Respons</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                <td style="padding: 12px;"><span style="background: rgba(124,77,255,0.2); color: var(--primary-light); padding: 4px 8px; border-radius: 6px; font-weight: 700;">POST</span></td>
+                <td style="padding: 12px; font-family: var(--font-mono); color: var(--accent);">/api/ai/chat</td>
+                <td style="padding: 12px;">Generasi dialog Furina AI dengan injeksi riwayat & konteks aplikasi</td>
+                <td style="padding: 12px; font-family: var(--font-mono); color: var(--emerald);">{ status: true, result: { answer, character } }</td>
+              </tr>
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                <td style="padding: 12px;"><span style="background: rgba(124,77,255,0.2); color: var(--primary-light); padding: 4px 8px; border-radius: 6px; font-weight: 700;">POST</span></td>
+                <td style="padding: 12px; font-family: var(--font-mono); color: var(--accent);">/api/charge</td>
+                <td style="padding: 12px;">Membuat transaksi Snap Midtrans (QRIS, VA BCA/Mandiri/BRI, E-Wallet)</td>
+                <td style="padding: 12px; font-family: var(--font-mono); color: var(--emerald);">{ redirect_url: "https://app.midtrans.com/..." }</td>
+              </tr>
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                <td style="padding: 12px;"><span style="background: rgba(0,229,255,0.2); color: var(--cyan); padding: 4px 8px; border-radius: 6px; font-weight: 700;">GET</span></td>
+                <td style="padding: 12px; font-family: var(--font-mono); color: var(--accent);">/api/status/:order_id</td>
+                <td style="padding: 12px;">Pengecekan status pembayaran transaksi Midtrans (Settlement / Pending)</td>
+                <td style="padding: 12px; font-family: var(--font-mono); color: var(--emerald);">{ transaction_status: "settlement" }</td>
+              </tr>
+              <tr>
+                <td style="padding: 12px;"><span style="background: rgba(124,77,255,0.2); color: var(--primary-light); padding: 4px 8px; border-radius: 6px; font-weight: 700;">POST</span></td>
+                <td style="padding: 12px; font-family: var(--font-mono); color: var(--accent);">/api/ai/reset-session</td>
+                <td style="padding: 12px;">Mengosongkan riwayat memori sesi percakapan Furina</td>
+                <td style="padding: 12px; font-family: var(--font-mono); color: var(--emerald);">{ status: true, message: "Sesi direset" }</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           SLIDE 20: ROADMAP & CLOSING
+           ==================================================================== -->
+      <section class="slide" id="slide-20">
+        <div class="slide-hero">
+          <div class="hero-pill anim-float"><i class="fas fa-rocket"></i> The Future of Cloud Hosting</div>
+          <h2 class="hero-main-title">
+            <span class="hero-gradient">Terima Kasih!</span><br>
+            Panggung Masa Depan VibeTech XYZ
+          </h2>
+          <p class="hero-tagline">
+            VibeTech XYZ membuktikan bahwa sinergi Flutter, SQLite, Express ESM, dan AI Teatrikal Furina 
+            mampu menciptakan pengalaman cloud hosting serba cepat, aman, dan memukau.
+          </p>
+
+          <div class="badge-group">
+            <div class="tech-badge"><i class="fab fa-whatsapp"></i> WhatsApp: 0878-8587-3325</div>
+            <div class="tech-badge"><i class="fas fa-envelope"></i> support@vibetech.xyz</div>
+            <div class="tech-badge"><i class="fas fa-globe"></i> https://vibetech.xyz</div>
+            <div class="tech-badge"><i class="fas fa-code"></i> Lead Developer: Raziek</div>
+          </div>
+
+          <div style="margin-top: 36px;">
+            <p style="color: var(--accent); font-family: var(--font-display); font-size: 1.15rem; font-weight: 700;">
+              ✨ Sesi Tanya Jawab (Q&A) Dibuka ✨
+            </p>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Bottom Footer Bar & Controls -->
+    <footer class="deck-footer">
+      <button id="btn-prev" class="deck-nav-btn" disabled><i class="fas fa-chevron-left"></i> Prev</button>
+      
+      <div class="deck-progress-bar">
+        <div id="deck-progress-fill" class="deck-progress-fill"></div>
+      </div>
+
+      <button id="btn-next" class="deck-nav-btn primary">Next <i class="fas fa-chevron-right"></i></button>
+    </footer>
+
+  </div>
+
+  <!-- Speaker Notes Modal Popup -->
+  <div id="speaker-notes-modal" class="speaker-notes-modal">
+    <div class="notes-header">
+      <div class="notes-title"><i class="fas fa-microphone-alt"></i> <span id="notes-slide-title">Speaker Notes</span></div>
+      <button id="btn-close-notes" class="btn-icon" style="width: 28px; height: 28px;"><i class="fas fa-times"></i></button>
+    </div>
+    <div id="notes-content-body" class="notes-content">
+      Memuat naskah presentasi...
+    </div>
+  </div>
+
+  <!-- Thumbnail Grid Drawer -->
+  <div id="thumb-drawer" class="thumb-drawer">
+    <h3 style="font-family: var(--font-display); font-size: 1.1rem; color: var(--cyan); margin-bottom: 16px;">
+      <i class="fas fa-th-large"></i> Daftar Slide (20)
+    </h3>
+    <div id="thumb-list"></div>
+  </div>
+
+  <!-- Presentation Script -->
+  <script src="app.js"></script>
+</body>
+</html>

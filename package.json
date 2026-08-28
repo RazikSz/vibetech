@@ -1,0 +1,22 @@
+{
+  "name": "vibetech_xyz",
+  "version": "2.0.0",
+  "description": "Backend API & Furina AI Assistant for VibeTech XYZ",
+  "main": "lib/services/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node lib/services/server.js",
+    "dev": "node lib/services/server.js",
+    "server": "node lib/services/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "jszip": "^3.10.1",
+    "midtrans-client": "^1.4.3",
+    "node-fetch": "^3.3.2",
+    "nodemailer": "^9.0.5",
+    "pptxgenjs": "^4.0.1",
+    "sharp": "^0.35.3"
+  }
+}

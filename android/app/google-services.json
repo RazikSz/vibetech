@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "567350641192",
+    "project_id": "vibetech-xyz",
+    "storage_bucket": "vibetech-xyz.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:567350641192:android:94e38e7e20510870f8eb1d",
+        "android_client_info": {
+          "package_name": "com.raziek.vibetech_xyz"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCfZOlBKRTSLo-RXOwaaXg-XPRb0_PZ0aI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
