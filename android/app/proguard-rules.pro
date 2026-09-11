@@ -13,6 +13,7 @@
 # Mencegah repackageclasses merusak paket Google, Firebase, Flutter, SQLite, Notifikasi, dan AndroidX (Mencegah runtime break & IPC break)
 -keeppackagenames com.google.**
 -keeppackagenames io.flutter.**
+-keeppackagenames io.flutter.plugins.**
 -keeppackagenames androidx.**
 -keeppackagenames com.tekartik.**
 -keeppackagenames com.dexterous.**
@@ -26,7 +27,8 @@
 -keep class io.flutter.plugins.GeneratedPluginRegistrant { *; }
 -keep class com.raziek.vibetech_xyz.MainActivity { *; }
 
-# 3. FLUTTER PLUGIN REGISTRATIONS (Presisi: Hanya keep entry point plugin, bukan seluruh package)
+# 3. FLUTTER PLUGIN REGISTRATIONS (Presisi: Menjaga semua plugin Flutter tetap utuh)
+-keep class io.flutter.plugins.** { *; }
 -keep class * implements io.flutter.embedding.engine.plugins.FlutterPlugin {
     public void onAttachedToEngine(io.flutter.embedding.engine.plugins.FlutterPlugin$FlutterPluginBinding);
     public void onDetachedFromEngine(io.flutter.embedding.engine.plugins.FlutterPlugin$FlutterPluginBinding);
@@ -43,9 +45,9 @@
 -keep class io.flutter.plugin.common.BasicMessageChannel { *; }
 -keep class io.flutter.plugin.common.EventChannel { *; }
 
-# 5. NOTIFIKASI SISTEM (BroadcastReceiver & Service untuk background notifications)
--keep class com.dexterous.flutterlocalnotifications.** extends android.content.BroadcastReceiver { *; }
--keep class com.dexterous.flutterlocalnotifications.** extends android.app.Service { *; }
+# 5. NOTIFIKASI SISTEM & BIOMETRIC (Service & Receiver)
+-keep class com.dexterous.flutterlocalnotifications.** { *; }
+-keep class androidx.biometric.** { *; }
 
 # 6. PARCELABLE & SERIALIZABLE
 -keepclassmembers class * implements android.os.Parcelable {
@@ -103,16 +105,15 @@
 -keep class io.requery.android.database.sqlite.** { *; }
 -keep class android.database.sqlite.** { *; }
 -keep class android.database.** { *; }
--keepclassmembers class * extends android.database.sqlite.SQLiteOpenHelper {
-    public <init>(...);
-    public void onCreate(android.database.sqlite.SQLiteDatabase);
-    public void onUpgrade(android.database.sqlite.SQLiteDatabase, int, int);
-    public void onOpen(android.database.sqlite.SQLiteDatabase);
-}
+-keep class * extends android.database.sqlite.SQLiteOpenHelper { *; }
+-keepclassmembers class * extends android.database.sqlite.SQLiteOpenHelper { *; }
+-keep class * extends android.database.sqlite.SQLiteDatabase { *; }
+-keepclassmembers class * extends android.database.sqlite.SQLiteDatabase { *; }
 -keep class com.google.firebase.** { *; }
 -keep class com.google.firebase.database.** { *; }
 -keep class com.google.firebase.auth.** { *; }
 -keep class com.google.firebase.firestore.** { *; }
+-keep class io.flutter.plugins.firebase.** { *; }
 -keep class com.google.android.gms.** { *; }
 -keepclassmembers class * {
     @com.google.firebase.database.PropertyName <fields>;
@@ -154,5 +155,10 @@
 -keep class io.flutter.plugins.localauth.** { *; }
 -keep class io.flutter.plugins.urllauncher.** { *; }
 -keep class io.flutter.plugins.webviewflutter.** { *; }
+-keep class android.webkit.** { *; }
+-keepclassmembers class * extends android.webkit.WebChromeClient { *; }
+-keepclassmembers class * extends android.webkit.WebViewClient { *; }
+-keep class androidx.core.provider.FontsContractCompat { *; }
+-keep class androidx.core.provider.FontRequest { *; }
 -keep class com.airbnb.lottie.** { *; }
 
