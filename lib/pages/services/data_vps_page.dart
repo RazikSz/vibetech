@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -9,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../constants/constants.dart';
 import '../../database/db_helper.dart';
 import '../../models/service_model.dart';
+import '../../services/cloud_sync_service.dart';
+import '../../services/firebase_transaction_service.dart';
 import '../../services/language_service.dart';
 import '../home/produk_page.dart';
 
@@ -33,16 +33,13 @@ class DataVpsPage extends StatefulWidget {
   State<DataVpsPage> createState() => _DataVpsPageState();
 }
 
-class _DataVpsPageState extends State<DataVpsPage>
-    with SingleTickerProviderStateMixin {
+class _DataVpsPageState extends State<DataVpsPage> {
   List<PurchasedService> _vpsList = [];
-  bool _isLoading = true;
   String _activeEmail = 'user@vibetech.com';
+  String _currentUserRole = 'user';
+  bool get _isAdmin =>
+      _currentUserRole == 'admin' || _currentUserRole == 'administrator';
   final Map<int, bool> _showPasswordMap = {};
-
-  late AnimationController _particleController;
-  final List<AppParticle> _particles = [];
-  final math.Random _random = math.Random();
 
   Color get _bgColor =>
       widget.isDarkMode ? AppColors.darkBg : AppColors.lightBg;
@@ -58,24 +55,28 @@ class _DataVpsPageState extends State<DataVpsPage>
   @override
   void initState() {
     super.initState();
-    // Inisialisasi Partikel Cyber Ambient (Dark Mode)
-    _particles.addAll(AppParticle.generateList(_random, count: 20));
-    _particleController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 10),
-    )..repeat();
-    _particleController.addListener(() {
-      AppParticle.updatePositions(_particles);
-    });
-
     _activeEmail = widget.userEmail;
     // Menginisialisasi email aktif dari SharedPreferences dan memuat data VPS
     _initAndLoadVpsData();
+
+    // Hubungkan streaming listener real-time Firebase RTDB untuk pembaruan instan
+    _vpsRealtimeListener = () {
+      if (mounted) {
+        _loadVpsData();
+      }
+    };
+    CloudSyncService.instance.servicesNotifier
+        .addListener(_vpsRealtimeListener!);
   }
+
+  VoidCallback? _vpsRealtimeListener;
 
   @override
   void dispose() {
-    _particleController.dispose();
+    if (_vpsRealtimeListener != null) {
+      CloudSyncService.instance.servicesNotifier
+          .removeListener(_vpsRealtimeListener!);
+    }
     super.dispose();
   }
 
@@ -87,6 +88,10 @@ class _DataVpsPageState extends State<DataVpsPage>
       if (savedEmail != null && savedEmail.isNotEmpty) {
         _activeEmail = savedEmail;
       }
+      final savedRole = prefs.getString('role');
+      if (savedRole != null && savedRole.isNotEmpty) {
+        _currentUserRole = savedRole.toLowerCase();
+      }
     } catch (_) {}
     await _loadVpsData();
   }
@@ -94,14 +99,17 @@ class _DataVpsPageState extends State<DataVpsPage>
   /// Memuat daftar VPS aktif milik pengguna dari tabel 'purchased_services' SQLite
   Future<void> _loadVpsData() async {
     if (!mounted) return;
-    setState(() => _isLoading = true);
-    final raw = await DatabaseHelper.instance
-        .getServicesByCategory(_activeEmail, 'VPS');
-    if (mounted) {
-      setState(() {
-        _vpsList = raw.map((e) => PurchasedService.fromMap(e)).toList();
-        _isLoading = false;
-      });
+    try {
+      final raw = await DatabaseHelper.instance
+          .getServicesByCategory(_activeEmail, 'VPS')
+          .timeout(const Duration(seconds: 4), onTimeout: () => []);
+      if (mounted) {
+        setState(() {
+          _vpsList = raw.map((e) => PurchasedService.fromMap(e)).toList();
+        });
+      }
+    } catch (e) {
+      debugPrint('[DataVpsPage] Error loading VPS data: $e');
     }
   }
 
@@ -133,6 +141,19 @@ class _DataVpsPageState extends State<DataVpsPage>
 
   /// Menampilkan dialog simulasi penambahan / provisioning manual VPS baru
   void _showAddVpsDialog() {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat menambah data VPS manual.',
+            'Access Denied! Only Administrators can add manual VPS data.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
     final nameCtrl = TextEditingController(text: 'VPS Ubuntu 22.04');
     // Menghasilkan IP publik unik acak dalam blok 103.187.x.x
     final ipCtrl = TextEditingController(
@@ -192,7 +213,7 @@ class _DataVpsPageState extends State<DataVpsPage>
               if (nameCtrl.text.isEmpty || ipCtrl.text.isEmpty) return;
               final now = DateTime.now();
               await DatabaseHelper.instance.createService({
-                'user_email': widget.userEmail,
+                'user_email': _activeEmail,
                 'nama_produk': nameCtrl.text,
                 'kategori': 'VPS',
                 'harga': double.tryParse(priceCtrl.text) ?? 50000.0,
@@ -221,6 +242,19 @@ class _DataVpsPageState extends State<DataVpsPage>
   }
 
   void _showDeleteConfirmDialog(int id, String name) {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat menghapus data VPS.',
+            'Access Denied! Only Administrators can delete VPS data.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -251,6 +285,11 @@ class _DataVpsPageState extends State<DataVpsPage>
             ),
             onPressed: () async {
               await DatabaseHelper.instance.deleteService(id);
+              await FirebaseTransactionService.instance.deleteServiceFromFirebase(
+                id,
+                namaProduk: name,
+                userEmail: _activeEmail,
+              );
               if (!ctx.mounted) return;
               Navigator.pop(ctx);
               _loadVpsData();
@@ -302,33 +341,22 @@ class _DataVpsPageState extends State<DataVpsPage>
               color: _textPrimary, fontWeight: FontWeight.bold, fontSize: 18),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.add_circle_outline_rounded,
-                color: AppColors.cyan),
-            onPressed: _showAddVpsDialog,
-            tooltip: LanguageService.text('Tambah VPS', 'Add VPS'),
-          ),
+          if (_isAdmin)
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline_rounded,
+                  color: AppColors.cyan),
+              onPressed: _showAddVpsDialog,
+              tooltip: LanguageService.text('Tambah VPS', 'Add VPS'),
+            ),
         ],
       ),
       body: Stack(
         children: [
           if (widget.isDarkMode)
-            Positioned.fill(
-              child: AnimatedBuilder(
-                animation: _particleController,
-                builder: (context, child) {
-                  return CustomPaint(
-                    size: MediaQuery.of(context).size,
-                    painter: AppParticlePainter(_particles),
-                  );
-                },
-              ),
-            ),
-          _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : _vpsList.isEmpty
-                  ? _buildEmptyState()
-                  : RefreshIndicator(
+            const CyberParticlesLayer(count: 20),
+          _vpsList.isEmpty
+              ? _buildEmptyState()
+              : RefreshIndicator(
                       onRefresh: _loadVpsData,
                       child: ListView.builder(
                         padding: const EdgeInsets.symmetric(
@@ -405,17 +433,19 @@ class _DataVpsPageState extends State<DataVpsPage>
                 ),
               ),
             ),
-            const SizedBox(height: 12),
-            TextButton.icon(
-              onPressed: _showAddVpsDialog,
-              icon: Icon(Icons.add_circle_outline_rounded,
-                  color: _textSecondary, size: 16),
-              label: Text(
-                LanguageService.text('Atau Tambah Kredensial Manual',
-                    'Or Add Credentials Manually'),
-                style: GoogleFonts.poppins(color: _textSecondary, fontSize: 12),
+            if (_isAdmin) ...[
+              const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: _showAddVpsDialog,
+                icon: Icon(Icons.add_circle_outline_rounded,
+                    color: _textSecondary, size: 16),
+                label: Text(
+                  LanguageService.text('Atau Tambah Kredensial Manual',
+                      'Or Add Credentials Manually'),
+                  style: GoogleFonts.poppins(color: _textSecondary, fontSize: 12),
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),
@@ -700,14 +730,16 @@ class _DataVpsPageState extends State<DataVpsPage>
                             fontSize: 14,
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline_rounded,
-                              color: AppColors.error, size: 20),
-                          onPressed: () => _showDeleteConfirmDialog(
-                              vps.id ?? 0, vps.namaProduk),
-                          tooltip: LanguageService.tr('hapus'),
-                        ),
+                        if (_isAdmin) ...[
+                          const SizedBox(width: 8),
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline_rounded,
+                                color: AppColors.error, size: 20),
+                            onPressed: () => _showDeleteConfirmDialog(
+                                vps.id ?? 0, vps.namaProduk),
+                            tooltip: LanguageService.tr('hapus'),
+                          ),
+                        ],
                       ],
                     ),
                   ],

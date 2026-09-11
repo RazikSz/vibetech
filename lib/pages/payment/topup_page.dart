@@ -1,21 +1,21 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
+import 'package:local_auth/local_auth.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vibetech_xyz/constants/constants.dart';
-import 'package:vibetech_xyz/pages/payment/pembayaran_page.dart';
 
 import '../../database/db_helper.dart';
 import '../../services/balance_service.dart';
 import '../../services/language_service.dart';
+import '../../services/midtrans_direct_payment_service.dart';
 import '../../services/notification_service.dart';
+import '../../services/qris_service.dart';
 
 /// ============================================================================
 /// HALAMAN TOP UP SALDO VIBEWALLET (TOP UP PAGE)
@@ -44,15 +44,11 @@ class _TopUpPageState extends State<TopUpPage>
   final TextEditingController _nominalController = TextEditingController();
   int _selectedNominal = 50000;
   String _selectedPaymentMethod = 'qris';
+  String _selectedAuthMethod = 'fingerprint';
   bool _isProcessing = false;
   String _activeEmail = 'user@vibetech.com';
 
-  // URL Backend Node.js & Direct Midtrans Snap API Configuration
-  static const String _baseUrl = 'http://10.0.2.2:3000';
-  static const String _midtransServerKey =
-      'Mid-server-dtHCBAI47kvZYV98pjt68ut8';
-  static const String _midtransSnapUrl =
-      'https://app.sandbox.midtrans.com/snap/v1/transactions';
+  final Set<String> _finalizedInvoices = {};
 
   late AnimationController _particleController;
   final List<AppParticle> _particles = [];
@@ -240,13 +236,134 @@ class _TopUpPageState extends State<TopUpPage>
       );
       return;
     }
+    if (amount > 20000000) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            LanguageService.text(
+              'Maksimal top up per transaksi adalah Rp 20.000.000',
+              'Maximum top up per transaction is Rp 20,000,000',
+            ),
+            style: GoogleFonts.poppins(),
+          ),
+          backgroundColor: AppColors.darkCard,
+        ),
+      );
+      return;
+    }
 
     HapticFeedback.heavyImpact();
     final method = _getSelectedMethodData();
     final invoiceNo =
         'TOPUP-${DateTime.now().millisecondsSinceEpoch.toString().substring(5)}';
 
-    _showTopUpPaymentBottomSheet(amount, method, invoiceNo);
+    // Buka Verifikasi Keamanan (Fingerprint & PIN) Sebelum Lanjut Bayar
+    _startSecurityAuthAndTopUp(amount, method, invoiceNo);
+  }
+
+  void _startSecurityAuthAndTopUp(
+      int amount, Map<String, dynamic> method, String invoiceNo) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (bottomSheetContext) {
+        return _TopUpSecurityAuthSheet(
+          isDarkMode: widget.isDarkMode,
+          totalAmount: amount,
+          initialMethod: _selectedAuthMethod,
+          userEmail: _activeEmail,
+          onVerified: () {
+            _showTopUpPaymentBottomSheet(amount, method, invoiceNo);
+          },
+          onMethodChanged: (newMethod) {
+            if (mounted) {
+              setState(() => _selectedAuthMethod = newMethod);
+            }
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildTopUpAuthMethodCard({
+    required String id,
+    required String name,
+    required String desc,
+    required IconData icon,
+    required Color color,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        decoration: BoxDecoration(
+          color: _cardColor,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isSelected ? color : _textSecondary.withValues(alpha: 0.15),
+            width: isSelected ? 2 : 1,
+          ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: color.withValues(alpha: 0.2),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ]
+              : [],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(icon, color: color, size: 22),
+                ),
+                Icon(
+                  isSelected
+                      ? Icons.check_circle_rounded
+                      : Icons.radio_button_unchecked,
+                  color: isSelected
+                      ? color
+                      : _textSecondary.withValues(alpha: 0.5),
+                  size: 20,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              name,
+              style: GoogleFonts.poppins(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: _textPrimary,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              desc,
+              style: GoogleFonts.poppins(
+                fontSize: 11,
+                color: _textSecondary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _showTopUpPaymentBottomSheet(
@@ -398,54 +515,107 @@ class _TopUpPageState extends State<TopUpPage>
 
                           // Metode Spesifik UI
                           if (methodId == 'qris') ...[
-                            // QRIS Code View
-                            Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(20),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.08),
-                                    blurRadius: 10,
-                                    offset: const Offset(0, 4),
+                            // QRIS Code View Dinamis
+                            Builder(
+                              builder: (context) {
+                                final dynamicQrisString =
+                                    QrisService.createLocalDynamicQris(
+                                        nominal: amount);
+                                return Container(
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(20),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black
+                                            .withValues(alpha: 0.08),
+                                        blurRadius: 10,
+                                        offset: const Offset(0, 4),
+                                      ),
+                                    ],
                                   ),
-                                ],
-                              ),
-                              child: Column(
-                                children: [
-                                  QrImageView(
-                                    data:
-                                        '00020101021226580014ID.LINKAJA.WWW01189360091100000000005204581253033605802ID5913VIBETECH_XYZ6007JAKARTA61051234062070703A016304$amount$invoiceNo',
-                                    version: QrVersions.auto,
-                                    size: 190.0,
-                                    backgroundColor: Colors.white,
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
+                                  child: Column(
                                     children: [
-                                      const Icon(Icons.qr_code_scanner,
-                                          size: 16, color: Colors.black87),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        'QRIS Standar Nasional Indonesia',
-                                        style: GoogleFonts.poppins(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w600,
-                                          color: Colors.black87,
+                                      QrImageView(
+                                        data: dynamicQrisString,
+                                        version: QrVersions.auto,
+                                        size: 190.0,
+                                        backgroundColor: Colors.white,
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Icon(Icons.qr_code_scanner,
+                                              size: 16, color: Colors.black87),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            'QRIS Standar Nasional Indonesia',
+                                            style: GoogleFonts.poppins(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                              color: Colors.black87,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 8),
+                                      InkWell(
+                                        onTap: () {
+                                          Clipboard.setData(ClipboardData(
+                                              text: dynamicQrisString));
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                LanguageService.text(
+                                                  'Kode QRIS berhasil disalin ke clipboard.',
+                                                  'QRIS string copied to clipboard.',
+                                                ),
+                                              ),
+                                              backgroundColor:
+                                                  const Color(0xFF00AA13),
+                                              behavior:
+                                                  SnackBarBehavior.floating,
+                                            ),
+                                          );
+                                        },
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                              vertical: 4, horizontal: 8),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              const Icon(Icons.copy_rounded,
+                                                  size: 14,
+                                                  color: Color(0xFF00AA13)),
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                LanguageService.text(
+                                                    'Salin Kode QRIS',
+                                                    'Copy QRIS String'),
+                                                style: GoogleFonts.poppins(
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w600,
+                                                  color:
+                                                      const Color(0xFF00AA13),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                         ),
                                       ),
                                     ],
                                   ),
-                                ],
-                              ),
+                                );
+                              },
                             ),
                             const SizedBox(height: 16),
                             Text(
                               LanguageService.text(
-                                'Buka aplikasi e-wallet atau m-Banking Anda, lalu pindai kode QR di atas untuk menyelesaikan pembayaran.',
-                                'Open your e-wallet or m-Banking app, then scan the QR code above to complete payment.',
+                                'Buka aplikasi e-wallet atau m-Banking Anda, lalu pindai kode QR di atas untuk menyelesaikan deposit. Nominal terisi otomatis.',
+                                'Open your e-wallet or m-Banking app, then scan the QR code above to complete deposit. Amount is filled automatically.',
                               ),
                               textAlign: TextAlign.center,
                               style: GoogleFonts.poppins(
@@ -598,13 +768,15 @@ class _TopUpPageState extends State<TopUpPage>
                     padding: const EdgeInsets.all(20),
                     child: Column(
                       children: [
-                        // Tombol 1: Gateway Midtrans Snap Resmi
+                        // Tombol 1: Gateway Midtrans Snap Resmi ATAU Konfirmasi QRIS Dinamis
                         SizedBox(
                           width: double.infinity,
                           height: 52,
                           child: ElevatedButton.icon(
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF002D62),
+                              backgroundColor: methodId == 'qris'
+                                  ? const Color(0xFF00AA13)
+                                  : const Color(0xFF002D62),
                               foregroundColor: Colors.white,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(14),
@@ -613,12 +785,23 @@ class _TopUpPageState extends State<TopUpPage>
                             ),
                             onPressed: _isProcessing
                                 ? null
-                                : () => _payWithMidtransGateway(
-                                      amount,
-                                      methodName,
-                                      invoiceNo,
-                                      bottomSheetContext,
-                                    ),
+                                : () async {
+                                    if (methodId == 'qris') {
+                                      Navigator.pop(bottomSheetContext);
+                                      await _finalizeTopUpSuccess(
+                                        amount,
+                                        'QRIS Dinamis',
+                                        invoiceNo,
+                                      );
+                                    } else {
+                                      _payWithMidtransGateway(
+                                        amount,
+                                        methodName,
+                                        invoiceNo,
+                                        bottomSheetContext,
+                                      );
+                                    }
+                                  },
                             icon: _isProcessing
                                 ? const SizedBox(
                                     width: 20,
@@ -628,13 +811,24 @@ class _TopUpPageState extends State<TopUpPage>
                                       strokeWidth: 2.2,
                                     ),
                                   )
-                                : const Icon(Icons.payment_rounded,
-                                    color: Color(0xFF00E5FF), size: 20),
+                                : Icon(
+                                    methodId == 'qris'
+                                        ? Icons.check_circle_rounded
+                                        : Icons.payment_rounded,
+                                    color: methodId == 'qris'
+                                        ? Colors.white
+                                        : const Color(0xFF00E5FF),
+                                    size: 20),
                             label: Text(
-                              LanguageService.text(
-                                'Bayar via Gateway Midtrans Snap',
-                                'Pay via Midtrans Snap Gateway',
-                              ),
+                              methodId == 'qris'
+                                  ? LanguageService.text(
+                                      'Saya Sudah Transfer via QRIS',
+                                      'I Have Paid via QRIS',
+                                    )
+                                  : LanguageService.text(
+                                      'Bayar via Gateway Midtrans Snap',
+                                      'Pay via Midtrans Snap Gateway',
+                                    ),
                               style: GoogleFonts.poppins(
                                 fontSize: 14.5,
                                 fontWeight: FontWeight.bold,
@@ -645,46 +839,6 @@ class _TopUpPageState extends State<TopUpPage>
                         ),
                         const SizedBox(height: 10),
 
-                        // Tombol 2: Konfirmasi Instan / Deposit Saldo Otomatis
-                        SizedBox(
-                          width: double.infinity,
-                          height: 46,
-                          child: OutlinedButton.icon(
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: AppColors.primary,
-                              side: const BorderSide(
-                                  color: AppColors.primary, width: 1.5),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                            ),
-                            onPressed: _isProcessing
-                                ? null
-                                : () async {
-                                    setModalState(() => _isProcessing = true);
-                                    setState(() => _isProcessing = true);
-                                    Navigator.pop(bottomSheetContext);
-                                    await _finalizeTopUpSuccess(
-                                        amount, methodName, invoiceNo);
-                                    if (mounted) {
-                                      setState(() => _isProcessing = false);
-                                    }
-                                  },
-                            icon: const Icon(Icons.flash_on_rounded,
-                                color: AppColors.primary, size: 18),
-                            label: Text(
-                              LanguageService.text(
-                                'Konfirmasi Instan (Deposit Langsung)',
-                                'Instant Confirmation (Direct Deposit)',
-                              ),
-                              style: GoogleFonts.poppins(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
 
                         TextButton(
                           onPressed: () => Navigator.pop(bottomSheetContext),
@@ -708,11 +862,9 @@ class _TopUpPageState extends State<TopUpPage>
     );
   }
 
-  Future<void> _payWithMidtransGateway(
-      int amount, String methodName, String invoiceNo, BuildContext bottomSheetContext) async {
+  Future<void> _payWithMidtransGateway(int amount, String methodName,
+      String invoiceNo, BuildContext bottomSheetContext) async {
     setState(() => _isProcessing = true);
-
-    String? redirectUrl;
 
     // 1. Simpan Transaksi sebagai Pending di Database SQLite & Cloud RTDB
     try {
@@ -726,112 +878,116 @@ class _TopUpPageState extends State<TopUpPage>
         'payment_method': 'Midtrans ($methodName)',
         'invoice_no': invoiceNo,
         'notes':
-            'Top Up Saldo VibeWallet sebesar Rp ${NumberFormat("#,##0", "id_ID").format(amount)} via Midtrans Snap ($methodName)',
+            'Top Up Saldo VibeWallet sebesar Rp ${NumberFormat("#,##0", "id_ID").format(amount)} via Midtrans ($methodName)',
       });
     } catch (e) {
       debugPrint('[TopUpPage] Error save pending transaction: $e');
     }
 
-    // 2. Coba jalur Backend Local API (timeout 3 detik)
-    try {
-      final response = await http
-          .post(
-            Uri.parse('$_baseUrl/api/charge'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'order_id': invoiceNo,
-              'gross_amount': amount,
-              'payment_method': _selectedPaymentMethod,
-              'customer_details': {
-                'email': _activeEmail,
-                'first_name': _activeEmail.split('@').first,
-              }
-            }),
-          )
-          .timeout(const Duration(seconds: 3));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        redirectUrl = data['redirect_url'];
-      }
-    } catch (_) {}
-
-    // 3. Fallback Otomatis ke Direct Midtrans Snap API (Anti Muter-Muter)
-    if (redirectUrl == null || redirectUrl.isEmpty) {
-      try {
-        final authHeader =
-            'Basic ${base64Encode(utf8.encode('$_midtransServerKey:'))}';
-        final response = await http
-            .post(
-              Uri.parse(_midtransSnapUrl),
-              headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'Authorization': authHeader,
-              },
-              body: jsonEncode({
-                'transaction_details': {
-                  'order_id': invoiceNo,
-                  'gross_amount': amount,
-                },
-                'customer_details': {
-                  'email': _activeEmail.isNotEmpty
-                      ? _activeEmail
-                      : 'customer@vibetech.xyz',
-                  'first_name': _activeEmail.split('@').first,
-                },
-                'item_details': [
-                  {
-                    'id': 'TOPUP_WALLET',
-                    'price': amount,
-                    'quantity': 1,
-                    'name': 'Top Up Saldo VibeWallet',
-                  }
-                ],
-              }),
-            )
-            .timeout(const Duration(seconds: 8));
-
-        if (response.statusCode == 200 || response.statusCode == 201) {
-          final data = jsonDecode(response.body);
-          redirectUrl = data['redirect_url'];
-        } else {
-          debugPrint(
-              '[TopUp Midtrans Gateway] Direct Snap response: ${response.statusCode} - ${response.body}');
-        }
-      } catch (e) {
-        debugPrint('[TopUp Midtrans Gateway] Direct Snap error: $e');
-      }
-    }
+    // 2. Inisialisasi Transaksi Direct Payment Midtrans (langsung ke aplikasi target)
+    final directResult = await MidtransDirectPaymentService.createDirectPayment(
+      orderId: invoiceNo,
+      grossAmount: amount,
+      paymentMethod: _selectedPaymentMethod,
+      customerEmail: _activeEmail,
+    );
 
     setState(() => _isProcessing = false);
 
-    if (redirectUrl != null && redirectUrl.isNotEmpty) {
+    if (directResult.success) {
       if (!mounted) return;
       if (bottomSheetContext.mounted) {
         Navigator.pop(bottomSheetContext);
       }
 
-      await Navigator.push<bool>(
-        context,
-        MaterialPageRoute(
-          builder: (context) => PaymentWebViewPage(paymentUrl: redirectUrl!),
-        ),
+      // 3. Buka langsung aplikasi target & tampilkan modal status auto-check (TANPA WEBVIEW MIDTRANS)
+      final isSuccess = await MidtransDirectPaymentService.showDirectPaymentModal(
+        context: context,
+        paymentResult: directResult,
+        displayName: methodName,
+        isDarkMode: widget.isDarkMode,
       );
 
-      // Setelah pengguna kembali dari Midtrans WebView atau berhasil bayar
-      await _finalizeTopUpSuccess(amount, 'Midtrans ($methodName)', invoiceNo);
+      if (!mounted) return;
+
+      bool verified = false;
+      if (isSuccess == true) {
+        verified = true;
+      } else {
+        verified = await MidtransDirectPaymentService.verifyPaymentStatus(invoiceNo);
+      }
+
+      if (verified) {
+        await _finalizeTopUpSuccess(amount, 'Midtrans ($methodName)', invoiceNo);
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              LanguageService.text(
+                'Pembayaran belum diverifikasi. Jika Anda sudah mentransfer, saldo akan otomatis masuk saat pembayaran terkonfirmasi.',
+                'Payment not yet verified. If you have already transferred, your balance will be credited once confirmed.',
+              ),
+              style: GoogleFonts.poppins(),
+            ),
+            backgroundColor: AppColors.darkCard,
+            action: SnackBarAction(
+              label: LanguageService.text('Cek Ulang', 'Retry'),
+              textColor: AppColors.accent,
+              onPressed: () async {
+                final recheck = await MidtransDirectPaymentService.verifyPaymentStatus(invoiceNo);
+                if (!mounted) return;
+                if (recheck) {
+                  await _finalizeTopUpSuccess(
+                      amount, 'Midtrans ($methodName)', invoiceNo);
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        LanguageService.text(
+                          'Pembayaran masih berstatus Pending atau belum diterima.',
+                          'Payment is still Pending or not received.',
+                        ),
+                        style: GoogleFonts.poppins(),
+                      ),
+                      backgroundColor: Colors.redAccent,
+                    ),
+                  );
+                }
+              },
+            ),
+          ),
+        );
+      }
     } else {
-      // Jika Midtrans server offline, jalankan simulasi sukses aman langsung
       if (bottomSheetContext.mounted) {
         Navigator.pop(bottomSheetContext);
       }
-      await _finalizeTopUpSuccess(amount, methodName, invoiceNo);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            directResult.errorMessage ??
+                LanguageService.text(
+                  'Gagal membuka pembayaran langsung ke aplikasi. Pastikan koneksi internet aktif.',
+                  'Failed to open direct app payment. Please check internet connection.',
+                ),
+            style: GoogleFonts.poppins(),
+          ),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
     }
   }
 
   Future<void> _finalizeTopUpSuccess(
       int amount, String methodName, String invoiceNo) async {
+    if (_finalizedInvoices.contains(invoiceNo)) {
+      debugPrint('[TopUpPage] Invoice $invoiceNo sudah diproses sebelumnya.');
+      return;
+    }
+    _finalizedInvoices.add(invoiceNo);
+
     // 1. Tambahkan saldo ke BalanceService & Database SQLite untuk akun aktif
     await BalanceService.addBalance(amount, emailOrUsername: _activeEmail);
 
@@ -1024,8 +1180,7 @@ class _TopUpPageState extends State<TopUpPage>
 
                     NotificationService.openExternalEmailApp(
                       toEmail: _activeEmail,
-                      subject:
-                          'Bukti Transaksi Top Up Saldo: $invoiceNo',
+                      subject: 'Bukti Transaksi Top Up Saldo: $invoiceNo',
                       body:
                           'Halo,\n\nBerikut bukti pengisian saldo VibeWallet Anda di VibeTech XYZ.\n\nNomor Transaksi: $invoiceNo\nMetode Deposit: $methodName\nNominal: $formattedAmount\nStatus: Berhasil & Saldo Masuk\n\nTerima kasih!',
                     );
@@ -1042,8 +1197,8 @@ class _TopUpPageState extends State<TopUpPage>
                     ),
                   ),
                   style: OutlinedButton.styleFrom(
-                    side: const BorderSide(
-                        color: AppColors.primary, width: 1.2),
+                    side:
+                        const BorderSide(color: AppColors.primary, width: 1.2),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -1125,14 +1280,18 @@ class _TopUpPageState extends State<TopUpPage>
         children: [
           if (widget.isDarkMode)
             Positioned.fill(
-              child: AnimatedBuilder(
-                animation: _particleController,
-                builder: (context, child) {
-                  return CustomPaint(
-                    size: MediaQuery.of(context).size,
-                    painter: AppParticlePainter(_particles),
-                  );
-                },
+              child: IgnorePointer(
+                child: RepaintBoundary(
+                  child: AnimatedBuilder(
+                    animation: _particleController,
+                    builder: (context, child) {
+                      return CustomPaint(
+                        size: MediaQuery.of(context).size,
+                        painter: AppParticlePainter(_particles),
+                      );
+                    },
+                  ),
+                ),
               ),
             ),
           SingleChildScrollView(
@@ -1370,13 +1529,94 @@ class _TopUpPageState extends State<TopUpPage>
                   );
                 }),
 
-                const SizedBox(height: 30),
+                const SizedBox(height: 24),
+
+                // Metode Verifikasi Keamanan (Dual Mode: Fingerprint & PIN)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      LanguageService.text('Metode Verifikasi Keamanan',
+                          'Security Verification Method'),
+                      style: GoogleFonts.poppins(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: _textPrimary,
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.verified_user_rounded,
+                              size: 13, color: AppColors.primary),
+                          const SizedBox(width: 4),
+                          Text(
+                            LanguageService.text(
+                                '2 Opsi Aktif', '2 Options Active'),
+                            style: GoogleFonts.poppins(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.primary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    // Opsi 1: Sidik Jari (Fingerprint)
+                    Expanded(
+                      child: _buildTopUpAuthMethodCard(
+                        id: 'fingerprint',
+                        name: LanguageService.text('Sidik Jari', 'Fingerprint'),
+                        desc: LanguageService.text(
+                            'Biometrik Instan', 'Instant Biometric'),
+                        icon: Icons.fingerprint_rounded,
+                        color: AppColors.primary,
+                        isSelected: _selectedAuthMethod == 'fingerprint',
+                        onTap: () {
+                          HapticFeedback.lightImpact();
+                          setState(() => _selectedAuthMethod = 'fingerprint');
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    // Opsi 2: PIN Transaksi (6 Digit)
+                    Expanded(
+                      child: _buildTopUpAuthMethodCard(
+                        id: 'pin',
+                        name: LanguageService.text(
+                            'PIN Transaksi', 'Security PIN'),
+                        desc: LanguageService.text(
+                            '6 Digit Keamanan', '6-Digit Security'),
+                        icon: Icons.lock_outline_rounded,
+                        color: const Color(0xFF7C4DFF),
+                        isSelected: _selectedAuthMethod == 'pin',
+                        onTap: () {
+                          HapticFeedback.lightImpact();
+                          setState(() => _selectedAuthMethod = 'pin');
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 28),
 
                 // Submit Button
                 SizedBox(
                   width: double.infinity,
                   height: 54,
-                  child: ElevatedButton(
+                  child: ElevatedButton.icon(
                     onPressed: _initiateTopUpPayment,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
@@ -1385,7 +1625,14 @@ class _TopUpPageState extends State<TopUpPage>
                       ),
                       elevation: 4,
                     ),
-                    child: Text(
+                    icon: Icon(
+                      _selectedAuthMethod == 'fingerprint'
+                          ? Icons.fingerprint_rounded
+                          : Icons.lock_outline_rounded,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                    label: Text(
                       LanguageService.text('Bayar Sekarang', 'Pay Now'),
                       style: GoogleFonts.poppins(
                         fontSize: 16,
@@ -1469,6 +1716,796 @@ class _TopUpPageState extends State<TopUpPage>
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// ============================================================================
+/// BOTTOM SHEET VERIFIKASI KEAMANAN TOP UP (DUAL MODE: FINGERPRINT & PIN)
+/// ============================================================================
+class _TopUpSecurityAuthSheet extends StatefulWidget {
+  final bool isDarkMode;
+  final int totalAmount;
+  final String initialMethod; // 'fingerprint' atau 'pin'
+  final String userEmail;
+  final VoidCallback onVerified;
+  final ValueChanged<String>? onMethodChanged;
+
+  const _TopUpSecurityAuthSheet({
+    required this.isDarkMode,
+    required this.totalAmount,
+    required this.initialMethod,
+    required this.userEmail,
+    required this.onVerified,
+    this.onMethodChanged,
+  });
+
+  @override
+  State<_TopUpSecurityAuthSheet> createState() =>
+      _TopUpSecurityAuthSheetState();
+}
+
+class _TopUpSecurityAuthSheetState extends State<_TopUpSecurityAuthSheet> {
+  late String _currentMethod;
+  final LocalAuthentication _auth = LocalAuthentication();
+
+  // State Biometrik
+  bool _isBiometricScanning = false;
+  String? _biometricStatusMessage;
+  bool _isBiometricError = false;
+
+  // State PIN
+  final List<TextEditingController> _pinControllers =
+      List.generate(6, (index) => TextEditingController());
+  final List<FocusNode> _pinFocusNodes =
+      List.generate(6, (index) => FocusNode());
+  String? _pinErrorMessage;
+  bool _isVerifyingPin = false;
+  bool _obscurePin = true;
+
+  final NumberFormat _currencyFormatter = NumberFormat.currency(
+    locale: 'id_ID',
+    symbol: 'Rp ',
+    decimalDigits: 0,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _currentMethod = widget.initialMethod;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_currentMethod == 'fingerprint') {
+        _triggerBiometricAuth();
+      } else {
+        if (_pinFocusNodes.isNotEmpty) {
+          _pinFocusNodes[0].requestFocus();
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    for (var c in _pinControllers) {
+      c.dispose();
+    }
+    for (var f in _pinFocusNodes) {
+      f.dispose();
+    }
+    super.dispose();
+  }
+
+  void _switchMethod(String method) {
+    if (_currentMethod == method) return;
+    setState(() {
+      _currentMethod = method;
+      _pinErrorMessage = null;
+      _biometricStatusMessage = null;
+      _isBiometricError = false;
+    });
+    widget.onMethodChanged?.call(method);
+
+    if (method == 'fingerprint') {
+      _triggerBiometricAuth();
+    } else {
+      Future.delayed(const Duration(milliseconds: 150), () {
+        if (mounted && _pinFocusNodes.isNotEmpty) {
+          _pinFocusNodes[0].requestFocus();
+        }
+      });
+    }
+  }
+
+  Future<void> _triggerBiometricAuth() async {
+    if (_isBiometricScanning) return;
+
+    setState(() {
+      _isBiometricScanning = true;
+      _isBiometricError = false;
+      _biometricStatusMessage = LanguageService.text(
+        'Tempelkan sidik jari pada sensor perangkat...',
+        'Place your finger on the device sensor...',
+      );
+    });
+
+    bool isAuthenticated = false;
+
+    try {
+      final bool canCheck = await _auth.canCheckBiometrics;
+      final bool isDeviceSupported = await _auth.isDeviceSupported();
+      final List<BiometricType> biometrics =
+          await _auth.getAvailableBiometrics();
+
+      debugPrint(
+          "LocalAuth TopUp: canCheck=$canCheck, isSupported=$isDeviceSupported, biometrics=$biometrics");
+
+      if (canCheck || isDeviceSupported || biometrics.isNotEmpty) {
+        isAuthenticated = await _auth.authenticate(
+          localizedReason: LanguageService.text(
+            'Konfirmasi Sidik Jari untuk Top Up Saldo ${_currencyFormatter.format(widget.totalAmount)}',
+            'Confirm Fingerprint for Top Up ${_currencyFormatter.format(widget.totalAmount)}',
+          ),
+          biometricOnly: true,
+        );
+      } else {
+        setState(() {
+          _isBiometricError = true;
+          _biometricStatusMessage = LanguageService.text(
+            'Sensor biometrik tidak terdeteksi pada perangkat ini. Silakan gunakan PIN.',
+            'Biometric sensor not available on this device. Please use PIN.',
+          );
+        });
+      }
+    } catch (e) {
+      debugPrint("LocalAuth TopUp error: $e");
+      setState(() {
+        _isBiometricError = true;
+        _biometricStatusMessage = LanguageService.text(
+          'Autentikasi sidik jari dibatalkan atau tidak tersedia.',
+          'Fingerprint authentication cancelled or unavailable.',
+        );
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _isBiometricScanning = false);
+      }
+    }
+
+    if (isAuthenticated && mounted) {
+      Navigator.pop(context);
+      widget.onVerified();
+    }
+  }
+
+  Future<void> _verifyPin() async {
+    final pin = _pinControllers.map((c) => c.text.trim()).join();
+
+    if (pin.length < 6) {
+      setState(() {
+        _pinErrorMessage = LanguageService.text(
+          'PIN harus terdiri dari 6 digit angka',
+          'PIN must be 6 digits',
+        );
+      });
+      return;
+    }
+
+    setState(() {
+      _isVerifyingPin = true;
+      _pinErrorMessage = null;
+    });
+
+    try {
+      final isPinValid =
+          await DatabaseHelper.instance.verifyUserPin(widget.userEmail, pin);
+
+      if (!mounted) return;
+
+      if (isPinValid) {
+        Navigator.pop(context);
+        widget.onVerified();
+      } else {
+        setState(() {
+          _isVerifyingPin = false;
+          _pinErrorMessage = LanguageService.text(
+            'PIN Transaksi salah! Silakan coba lagi.',
+            'Incorrect Transaction PIN! Please try again.',
+          );
+        });
+        for (var c in _pinControllers) {
+          c.clear();
+        }
+        if (_pinFocusNodes.isNotEmpty) {
+          _pinFocusNodes[0].requestFocus();
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isVerifyingPin = false;
+          _pinErrorMessage = 'Terjadi kesalahan validasi PIN: $e';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.isDarkMode;
+    final sheetBg = isDark ? AppColors.darkCard : Colors.white;
+    final cardInnerBg =
+        isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC);
+    final textPrimary =
+        isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary;
+    final textSecondary =
+        isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary;
+    final pinBoxBg = isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9);
+
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+
+    return AnimatedPadding(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      duration: const Duration(milliseconds: 150),
+      child: Container(
+        decoration: BoxDecoration(
+          color: sheetBg,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.4),
+              blurRadius: 25,
+              offset: const Offset(0, -5),
+            ),
+          ],
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+        child: SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Handle Bar
+              Container(
+                width: 44,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: textSecondary.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Header
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(
+                          Icons.security_rounded,
+                          color: AppColors.primary,
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            LanguageService.text(
+                                'Verifikasi Keamanan', 'Security Verification'),
+                            style: GoogleFonts.poppins(
+                              fontSize: 17,
+                              fontWeight: FontWeight.bold,
+                              color: textPrimary,
+                            ),
+                          ),
+                          Text(
+                            '${LanguageService.text('Nominal Top Up', 'Top Up Amount')}: ${_currencyFormatter.format(widget.totalAmount)}',
+                            style: GoogleFonts.poppins(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.primary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: Icon(Icons.close_rounded, color: textSecondary),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+
+              // Selector Tab: Sidik Jari vs PIN
+              Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: cardInnerBg,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: isDark ? Colors.white10 : const Color(0xFFE2E8F0),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    // Tab Sidik Jari
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => _switchMethod('fingerprint'),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          decoration: BoxDecoration(
+                            color: _currentMethod == 'fingerprint'
+                                ? AppColors.primary
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: _currentMethod == 'fingerprint'
+                                ? [
+                                    BoxShadow(
+                                      color: AppColors.primary
+                                          .withValues(alpha: 0.3),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ]
+                                : [],
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.fingerprint_rounded,
+                                size: 18,
+                                color: _currentMethod == 'fingerprint'
+                                    ? Colors.white
+                                    : textSecondary,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                LanguageService.text(
+                                    'Sidik Jari', 'Fingerprint'),
+                                style: GoogleFonts.poppins(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  color: _currentMethod == 'fingerprint'
+                                      ? Colors.white
+                                      : textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    // Tab PIN 6 Digit
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => _switchMethod('pin'),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          decoration: BoxDecoration(
+                            color: _currentMethod == 'pin'
+                                ? const Color(0xFF7C4DFF)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: _currentMethod == 'pin'
+                                ? [
+                                    BoxShadow(
+                                      color: const Color(0xFF7C4DFF)
+                                          .withValues(alpha: 0.3),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ]
+                                : [],
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.lock_outline_rounded,
+                                size: 18,
+                                color: _currentMethod == 'pin'
+                                    ? Colors.white
+                                    : textSecondary,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                LanguageService.text(
+                                    'PIN 6-Digit', '6-Digit PIN'),
+                                style: GoogleFonts.poppins(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  color: _currentMethod == 'pin'
+                                      ? Colors.white
+                                      : textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // ==================== VIEW METODE FINGERPRINT ====================
+              if (_currentMethod == 'fingerprint') ...[
+                GestureDetector(
+                  onTap: _triggerBiometricAuth,
+                  child: Container(
+                    width: 110,
+                    height: 110,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.primary.withValues(alpha: 0.12),
+                      border: Border.all(
+                        color: _isBiometricScanning
+                            ? AppColors.primary
+                            : (_isBiometricError
+                                ? Colors.orange
+                                : AppColors.primary.withValues(alpha: 0.5)),
+                        width: 2.5,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.primary.withValues(alpha: 0.2),
+                          blurRadius: 20,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: _isBiometricScanning
+                          ? const SizedBox(
+                              width: 50,
+                              height: 50,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 3,
+                                color: AppColors.primary,
+                              ),
+                            )
+                          : const Icon(
+                              Icons.fingerprint_rounded,
+                              size: 64,
+                              color: AppColors.primary,
+                            ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  LanguageService.text(
+                      'Pindai Sidik Jari Anda', 'Scan Your Fingerprint'),
+                  style: GoogleFonts.poppins(
+                    fontSize: 17,
+                    fontWeight: FontWeight.bold,
+                    color: textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  LanguageService.text(
+                    'Letakkan sidik jari pada sensor biometrik untuk memverifikasi top up saldo VibeWallet Anda.',
+                    'Place your fingerprint on the biometric sensor to verify your VibeWallet top up.',
+                  ),
+                  textAlign: TextAlign.center,
+                  style:
+                      GoogleFonts.poppins(fontSize: 13, color: textSecondary),
+                ),
+                if (_biometricStatusMessage != null) ...[
+                  const SizedBox(height: 14),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _isBiometricError
+                          ? Colors.orange.withValues(alpha: 0.15)
+                          : AppColors.primary.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: _isBiometricError
+                            ? Colors.orange.withValues(alpha: 0.4)
+                            : AppColors.primary.withValues(alpha: 0.4),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _isBiometricError
+                              ? Icons.info_outline_rounded
+                              : Icons.fingerprint_rounded,
+                          size: 16,
+                          color: _isBiometricError
+                              ? Colors.orange
+                              : AppColors.primary,
+                        ),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            _biometricStatusMessage!,
+                            style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: _isBiometricError
+                                  ? Colors.orangeAccent
+                                  : AppColors.primary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 24),
+
+                // Tombol Pindai Ulang
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton.icon(
+                    onPressed:
+                        _isBiometricScanning ? null : _triggerBiometricAuth,
+                    icon: _isBiometricScanning
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.fingerprint_rounded,
+                            color: Colors.white),
+                    label: Text(
+                      LanguageService.text(
+                          'Pindai Sidik Jari Sekarang', 'Scan Fingerprint Now'),
+                      style: GoogleFonts.poppins(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      elevation: 0,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+
+                // Tombol Beralih ke PIN
+                TextButton.icon(
+                  onPressed: () => _switchMethod('pin'),
+                  icon: const Icon(Icons.pin_outlined,
+                      size: 16, color: Color(0xFF7C4DFF)),
+                  label: Text(
+                    LanguageService.text(
+                        'Gunakan PIN Transaksi Sebagai Alternatif',
+                        'Use Transaction PIN as Alternative'),
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF7C4DFF),
+                    ),
+                  ),
+                ),
+              ],
+
+              // ==================== VIEW METODE PIN 6 DIGIT ====================
+              if (_currentMethod == 'pin') ...[
+                Text(
+                  LanguageService.text('Masukkan PIN Transaksi 6-Digit',
+                      'Enter 6-Digit Transaction PIN'),
+                  style: GoogleFonts.poppins(
+                    fontSize: 17,
+                    fontWeight: FontWeight.bold,
+                    color: textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  LanguageService.text(
+                    'Ketikkan 6-digit kode PIN keamanan akun Anda untuk konfirmasi top up saldo.',
+                    'Enter your 6-digit security PIN to confirm balance top up.',
+                  ),
+                  textAlign: TextAlign.center,
+                  style:
+                      GoogleFonts.poppins(fontSize: 13, color: textSecondary),
+                ),
+                const SizedBox(height: 20),
+
+                // 6 Kotak Digit PIN
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: List.generate(6, (index) {
+                    return SizedBox(
+                      width: 44,
+                      height: 52,
+                      child: TextField(
+                        controller: _pinControllers[index],
+                        focusNode: _pinFocusNodes[index],
+                        keyboardType: TextInputType.number,
+                        textAlign: TextAlign.center,
+                        obscureText: _obscurePin,
+                        maxLength: 1,
+                        style: GoogleFonts.spaceMono(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: textPrimary,
+                        ),
+                        decoration: InputDecoration(
+                          filled: true,
+                          fillColor: pinBoxBg,
+                          counterText: '',
+                          contentPadding: EdgeInsets.zero,
+                          enabledBorder: OutlineInputBorder(
+                            borderSide: BorderSide(
+                              color: _pinErrorMessage != null
+                                  ? Colors.red
+                                  : (isDark
+                                      ? Colors.white24
+                                      : const Color(0xFFCBD5E1)),
+                            ),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderSide: BorderSide(
+                              color: _pinErrorMessage != null
+                                  ? Colors.red
+                                  : const Color(0xFF7C4DFF),
+                              width: 2,
+                            ),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        onChanged: (value) {
+                          setState(() => _pinErrorMessage = null);
+                          if (value.isNotEmpty && index < 5) {
+                            _pinFocusNodes[index + 1].requestFocus();
+                          } else if (value.isEmpty && index > 0) {
+                            _pinFocusNodes[index - 1].requestFocus();
+                          } else if (value.isNotEmpty && index == 5) {
+                            _verifyPin();
+                          }
+                        },
+                      ),
+                    );
+                  }),
+                ),
+
+                if (_pinErrorMessage != null) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.error_outline_rounded,
+                          size: 16, color: Colors.red),
+                      const SizedBox(width: 6),
+                      Text(
+                        _pinErrorMessage!,
+                        style: GoogleFonts.poppins(
+                          color: Colors.red,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    TextButton.icon(
+                      onPressed: () =>
+                          setState(() => _obscurePin = !_obscurePin),
+                      icon: Icon(
+                        _obscurePin
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                        size: 16,
+                        color: textSecondary,
+                      ),
+                      label: Text(
+                        _obscurePin
+                            ? LanguageService.text('Lihat PIN', 'Show PIN')
+                            : LanguageService.text(
+                                'Sembunyikan PIN', 'Hide PIN'),
+                        style: GoogleFonts.poppins(
+                            fontSize: 12, color: textSecondary),
+                      ),
+                    ),
+                    Text(
+                      LanguageService.text(
+                          'PIN Bawaan: 123456', 'Default PIN: 123456'),
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        color: textSecondary.withValues(alpha: 0.7),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                // Tombol Verifikasi PIN & Bayar
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton.icon(
+                    onPressed: _isVerifyingPin ? null : _verifyPin,
+                    icon: _isVerifyingPin
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.lock_open_rounded,
+                            color: Colors.white),
+                    label: Text(
+                      LanguageService.text('Verifikasi PIN & Lanjut Bayar',
+                          'Verify PIN & Proceed to Pay'),
+                      style: GoogleFonts.poppins(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF7C4DFF),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      elevation: 0,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+
+                // Tombol Beralih ke Fingerprint
+                TextButton.icon(
+                  onPressed: () => _switchMethod('fingerprint'),
+                  icon: const Icon(Icons.fingerprint_rounded,
+                      size: 16, color: AppColors.primary),
+                  label: Text(
+                    LanguageService.text('Gunakan Sidik Jari (Fingerprint)',
+                        'Use Fingerprint (Biometric)'),
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }

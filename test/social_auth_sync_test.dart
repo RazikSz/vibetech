@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibetech_xyz/services/firebase_user_service.dart';
+import 'package:vibetech_xyz/services/github_auth_service.dart';
 
 void main() {
   group('Google & GitHub Auth Firebase Sync & Dummy Filter Tests', () {
@@ -53,12 +54,22 @@ void main() {
         'authProvider': 'GitHub',
       };
 
+      await FirebaseUserService.instance.deleteUserFromFirebase(docId: 'gh_dummy_test_123');
       final docId = await FirebaseUserService.instance.saveUserToFirebase(dummyUserData);
       expect(docId, 'gh_dummy_test_123');
 
       // Memastikan akun dummy tidak tersimpan di cloud database
       final cloudUser = await FirebaseUserService.instance.getUserFromFirebase('gh_dummy_test_123');
       expect(cloudUser, isNull);
+    });
+
+    test('GithubAuthService credentials match Firebase Authentication configuration perfectly', () {
+      expect(GithubAuthService.clientId, equals('Ov23liWR0VXKPAnv1YHr'));
+      expect(GithubAuthService.clientSecret, equals('7df026fa2f1dad55c2b1e1f4e1af57fa93660ed5'));
+      expect(GithubAuthService.redirectUrl, equals('https://vibetech-xyz.firebaseapp.com/__/auth/handler'));
+      expect(GithubAuthService.authorizationUrl, contains('client_id=Ov23liWR0VXKPAnv1YHr'));
+      expect(GithubAuthService.authorizationUrl, contains('vibetech-xyz.firebaseapp.com%2F__%2Fauth%2Fhandler'));
+      expect(GithubAuthService.authorizationUrl, contains('scope=read:user%20user:email'));
     });
   });
 }

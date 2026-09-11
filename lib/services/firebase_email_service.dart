@@ -217,6 +217,7 @@ class FirebaseEmailService {
       await prefs.setString('smtp_pass', cleanPass);
       await prefs.setString('smtp_host', cleanHost);
       await prefs.setInt('smtp_port', smtpPort);
+      await prefs.setBool('smtp_is_active', true);
       await prefs.setString('smtp_updated_at', nowIso);
     } catch (_) {}
 
@@ -339,12 +340,14 @@ class FirebaseEmailService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final smtpUser = prefs.getString('smtp_user');
+      final smtpPass = prefs.getString('smtp_pass');
       if (smtpUser != null && smtpUser.isNotEmpty) {
         return {
           'smtp_user': smtpUser,
-          'smtp_pass': prefs.getString('smtp_pass') ?? '',
+          'smtp_pass': smtpPass ?? '',
           'smtp_host': prefs.getString('smtp_host') ?? 'smtp.gmail.com',
           'smtp_port': prefs.getInt('smtp_port') ?? 465,
+          'is_active': true,
           'updated_at': prefs.getString('smtp_updated_at') ?? DateTime.now().toIso8601String(),
         };
       }
@@ -367,25 +370,32 @@ class FirebaseEmailService {
     }
   }
 
-  /// Cache data ke SharedPreferences dan SQLite secara background
+  /// Cache data ke SharedPreferences dan SQLite secara background dengan proteksi anti-hapus sandi
   void _cacheSettingsLocally(Map<String, dynamic> data, {bool writeToDb = false}) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final smtpUser = data['smtp_user']?.toString();
-      final smtpPass = data['smtp_pass']?.toString() ?? '';
-      final smtpHost = data['smtp_host']?.toString() ?? 'smtp.gmail.com';
+      final smtpUser = data['smtp_user']?.toString().trim();
+      final incomingPass = (data['smtp_pass']?.toString() ?? '').replaceAll(' ', '').trim();
+      final existingPass = (prefs.getString('smtp_pass') ?? '').replaceAll(' ', '').trim();
+      // JANGAN PERNAH menimpa password lokal non-kosong dengan string kosong dari cloud!
+      final smtpPass = incomingPass.isNotEmpty ? incomingPass : existingPass;
+
+      final smtpHost = data['smtp_host']?.toString().trim() ?? 'smtp.gmail.com';
       final smtpPort = (data['smtp_port'] as num?)?.toInt() ?? 465;
       final updatedAt = data['updated_at']?.toString() ?? DateTime.now().toIso8601String();
       final userEmail = data['user_email']?.toString();
 
       if (smtpUser != null && smtpUser.isNotEmpty) {
         await prefs.setString('smtp_user', smtpUser);
-        await prefs.setString('smtp_pass', smtpPass);
+        if (smtpPass.isNotEmpty) {
+          await prefs.setString('smtp_pass', smtpPass);
+        }
         await prefs.setString('smtp_host', smtpHost);
         await prefs.setInt('smtp_port', smtpPort);
+        await prefs.setBool('smtp_is_active', true);
         await prefs.setString('smtp_updated_at', updatedAt);
 
-        if (writeToDb) {
+        if (writeToDb && smtpPass.isNotEmpty) {
           try {
             await DatabaseHelper.instance.saveEmailSettings(
               smtpUser: smtpUser,

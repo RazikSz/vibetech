@@ -31,14 +31,17 @@ class LupaPasswordPage extends StatefulWidget {
 class _LupaPasswordPageState extends State<LupaPasswordPage>
     with TickerProviderStateMixin {
   final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _pinController = TextEditingController();
   final TextEditingController _newPasswordController = TextEditingController();
   final TextEditingController _confirmPasswordController =
       TextEditingController();
 
   final FocusNode _emailFocus = FocusNode();
+  final FocusNode _pinFocus = FocusNode();
   final FocusNode _newPasswordFocus = FocusNode();
   final FocusNode _confirmPasswordFocus = FocusNode();
 
+  bool _obscurePin = true;
   bool _obscureNewPassword = true;
   bool _obscureConfirmPassword = true;
   bool _isLoading = false;
@@ -54,14 +57,9 @@ class _LupaPasswordPageState extends State<LupaPasswordPage>
   // Animation Controllers & Particle System
   late AnimationController _mainAnimationController;
   late AnimationController _pulseController;
-  late AnimationController _ringController;
-  late AnimationController _particleController;
 
   late Animation<double> _fadeAnimation;
   late Animation<Offset> _slideAnimation;
-
-  final List<AppParticle> _particles = [];
-  final math.Random _random = math.Random();
 
   @override
   void initState() {
@@ -69,20 +67,9 @@ class _LupaPasswordPageState extends State<LupaPasswordPage>
     _initThemeMode();
 
     _emailFocus.addListener(() => setState(() {}));
+    _pinFocus.addListener(() => setState(() {}));
     _newPasswordFocus.addListener(() => setState(() {}));
     _confirmPasswordFocus.addListener(() => setState(() {}));
-
-    // Inisialisasi 22 Partikel Cyber Ambient (Identik dengan Register Page)
-    _particles.addAll(AppParticle.generateList(_random, count: 22));
-
-    _particleController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 10),
-    )..repeat();
-
-    _particleController.addListener(() {
-      AppParticle.updatePositions(_particles);
-    });
 
     _mainAnimationController = AnimationController(
       vsync: this,
@@ -109,11 +96,6 @@ class _LupaPasswordPageState extends State<LupaPasswordPage>
       duration: const Duration(milliseconds: 2200),
     )..repeat(reverse: true);
 
-    _ringController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 14),
-    )..repeat();
-
     _mainAnimationController.forward();
   }
 
@@ -134,17 +116,17 @@ class _LupaPasswordPageState extends State<LupaPasswordPage>
   void dispose() {
     ThemeService.themeNotifier.removeListener(_onThemeChanged);
     _emailController.dispose();
+    _pinController.dispose();
     _newPasswordController.dispose();
     _confirmPasswordController.dispose();
 
     _emailFocus.dispose();
+    _pinFocus.dispose();
     _newPasswordFocus.dispose();
     _confirmPasswordFocus.dispose();
 
     _mainAnimationController.dispose();
     _pulseController.dispose();
-    _ringController.dispose();
-    _particleController.dispose();
     super.dispose();
   }
 
@@ -202,10 +184,11 @@ class _LupaPasswordPageState extends State<LupaPasswordPage>
     );
   }
 
-  // --- LOGIKA VERIFIKASI EMAIL (LANGKAH 1) ---
+  // --- LOGIKA VERIFIKASI EMAIL & PIN (LANGKAH 1) ---
 
   Future<void> _verifyEmail() async {
     final email = _emailController.text.trim();
+    final pin = _pinController.text.trim();
 
     if (email.isEmpty) {
       _showErrorSnackBar(LanguageService.text(
@@ -219,6 +202,14 @@ class _LupaPasswordPageState extends State<LupaPasswordPage>
       _showErrorSnackBar(LanguageService.text(
         'Format email tidak valid! Harap sertakan tanda @',
         'Invalid email format! Please include @',
+      ));
+      return;
+    }
+
+    if (pin.isEmpty || pin.length != 6) {
+      _showErrorSnackBar(LanguageService.text(
+        'PIN Transaksi Keamanan 6-digit harus diisi!',
+        '6-digit Security PIN is required!',
       ));
       return;
     }
@@ -238,6 +229,16 @@ class _LupaPasswordPageState extends State<LupaPasswordPage>
           'Email "$email" is not registered in system database!',
         ));
       } else {
+        final isPinValid =
+            await DatabaseHelper.instance.verifyUserPin(email, pin);
+        if (!isPinValid) {
+          _showErrorSnackBar(LanguageService.text(
+            'PIN Keamanan salah! Verifikasi identitas gagal.',
+            'Incorrect Security PIN! Identity verification failed.',
+          ));
+          return;
+        }
+
         setState(() {
           _isEmailVerified = true;
           _verifiedUsername = (user['username'] ?? '').toString();
@@ -245,8 +246,8 @@ class _LupaPasswordPageState extends State<LupaPasswordPage>
           _verifiedRole = (user['role'] ?? 'user').toString().toUpperCase();
         });
         _showSuccessSnackBar(LanguageService.text(
-          'Akun $_verifiedUsername ditemukan! Silakan tentukan kata sandi baru.',
-          'Account $_verifiedUsername found! Please set a new password.',
+          'Identitas akun terverifikasi! Silakan tentukan kata sandi baru.',
+          'Account identity verified! Please set a new password.',
         ));
       }
     } catch (e) {
@@ -262,6 +263,7 @@ class _LupaPasswordPageState extends State<LupaPasswordPage>
     final newPassword = _newPasswordController.text.trim();
     final confirmPassword = _confirmPasswordController.text.trim();
     final email = _emailController.text.trim();
+    final pin = _pinController.text.trim();
 
     if (newPassword.isEmpty) {
       _showErrorSnackBar(LanguageService.text(
@@ -283,6 +285,16 @@ class _LupaPasswordPageState extends State<LupaPasswordPage>
       _showErrorSnackBar(LanguageService.text(
         'Konfirmasi kata sandi tidak cocok!',
         'Password confirmation does not match!',
+      ));
+      return;
+    }
+
+    // Re-verifikasi otorisasi PIN sebelum eksekusi pembaruan
+    final isPinValid = await DatabaseHelper.instance.verifyUserPin(email, pin);
+    if (!isPinValid) {
+      _showErrorSnackBar(LanguageService.text(
+        'Otorisasi ditolak! PIN keamanan tidak valid.',
+        'Authorization denied! Security PIN is invalid.',
       ));
       return;
     }
@@ -475,17 +487,9 @@ class _LupaPasswordPageState extends State<LupaPasswordPage>
           // 2. Ambient Neon Glow Orbs (Mode Gelap)
           if (_isDarkMode) AppNeonOrbs(pulseAnimation: _pulseController),
 
-          // 3. Floating Cyber Particle Canvas (Identik dengan Register Page & Login Page)
+          // 3. Floating Cyber Particle Canvas (Animated & GPU-isolated)
           if (_isDarkMode)
-            AnimatedBuilder(
-              animation: _particleController,
-              builder: (context, child) {
-                return CustomPaint(
-                  size: MediaQuery.of(context).size,
-                  painter: AppParticlePainter(_particles),
-                );
-              },
-            ),
+            const CyberParticlesLayer(count: 20),
 
           // 4. Main Content dengan Floating Top Bar
           SafeArea(
@@ -516,15 +520,12 @@ class _LupaPasswordPageState extends State<LupaPasswordPage>
                                       alignment: Alignment.center,
                                       children: [
                                         if (_isDarkMode)
-                                          RotationTransition(
-                                            turns: _ringController,
-                                            child: CustomPaint(
-                                              size: const Size(95, 95),
-                                              painter: _MiniResetRingPainter(
-                                                color: const Color(0xFF00E5FF),
-                                                secondaryColor:
-                                                    const Color(0xFF7C4DFF),
-                                              ),
+                                          CustomPaint(
+                                            size: const Size(95, 95),
+                                            painter: _MiniResetRingPainter(
+                                              color: const Color(0xFF00E5FF),
+                                              secondaryColor:
+                                                  const Color(0xFF7C4DFF),
                                             ),
                                           ),
                                         Container(
@@ -723,6 +724,7 @@ class _LupaPasswordPageState extends State<LupaPasswordPage>
                                               HapticFeedback.selectionClick();
                                               setState(() {
                                                 _isEmailVerified = false;
+                                                _pinController.clear();
                                                 _newPasswordController.clear();
                                                 _confirmPasswordController
                                                     .clear();
@@ -731,6 +733,38 @@ class _LupaPasswordPageState extends State<LupaPasswordPage>
                                           )
                                         : null,
                                   ),
+
+                                  if (!_isEmailVerified) ...[
+                                    const SizedBox(height: 14),
+                                    _buildSectionTitle(
+                                      icon: Icons.pin_rounded,
+                                      title: LanguageService.text(
+                                        'PIN Transaksi Keamanan (6 Digit)',
+                                        'Security Transaction PIN (6 Digits)',
+                                      ),
+                                      color: const Color(0xFF00E5FF),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    _buildInputField(
+                                      controller: _pinController,
+                                      focusNode: _pinFocus,
+                                      label: LanguageService.text(
+                                        'PIN Keamanan Akun',
+                                        'Account Security PIN',
+                                      ),
+                                      hint: '123456',
+                                      icon: Icons.lock_outline_rounded,
+                                      keyboardType: TextInputType.number,
+                                      obscureText: _obscurePin,
+                                      onToggleObscure: () => setState(
+                                          () => _obscurePin = !_obscurePin),
+                                      primaryText: primaryText,
+                                      secondaryText: secondaryText,
+                                      hintText: hintText,
+                                      fieldBg: fieldBg,
+                                      fieldBorder: fieldBorder,
+                                    ),
+                                  ],
 
                                   // Jika Akun Berhasil Ditemukan (Info Banner)
                                   if (_isEmailVerified) ...[

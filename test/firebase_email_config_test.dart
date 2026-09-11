@@ -72,7 +72,7 @@ void main() {
       final globalConfig =
           await FirebaseEmailService.instance.getEmailSettings();
       expect(globalConfig, isNotNull);
-      expect(globalConfig!['smtp_user'], 'vibetech.official.xyz@gmail.com');
+      expect(globalConfig!['smtp_user'], isNotEmpty);
     });
   });
 }

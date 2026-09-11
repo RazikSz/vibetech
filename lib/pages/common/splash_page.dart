@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:vibetech_xyz/constants/constants.dart';
 import 'package:vibetech_xyz/pages/auth/login_page.dart';
-import 'package:vibetech_xyz/services/cloud_sync_service.dart';
 
 /// ============================================================================
 /// HALAMAN PEMBUKA / SPLASH SCREEN (SPLASH PAGE)
@@ -28,7 +27,6 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
   late AnimationController _ringController;
   late AnimationController _progressController;
   late AnimationController _shimmerController;
-  late AnimationController _particleController;
 
   // Animations
   late Animation<double> _logoScale;
@@ -41,8 +39,6 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
 
   // State
   bool _navigated = false;
-  final List<AppParticle> _particles = [];
-  final math.Random _random = math.Random();
 
   @override
   void initState() {
@@ -58,17 +54,7 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
       ),
     );
 
-    // Inisialisasi Partikel Latar Belakang
-    _particles.addAll(AppParticle.generateList(_random, count: 28));
 
-    // 1. Particle Controller
-    _particleController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 10),
-    )..repeat();
-    _particleController.addListener(() {
-      AppParticle.updatePositions(_particles);
-    });
 
     // 2. Main Intro Staggered Controller
     _introController = AnimationController(
@@ -144,18 +130,15 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
       duration: const Duration(milliseconds: 1400),
     )..repeat();
 
-    // 6. Loading Progress (0.0 to 1.0 over 4.2 seconds)
+    // 6. Loading Progress (0.0 to 1.0 over 1.8 seconds)
     _progressController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 4200),
+      duration: const Duration(milliseconds: 1800),
     );
 
     // Jalankan Animasi
     _introController.forward();
     _progressController.forward();
-
-    // Jalankan Sinkronisasi Cloud Firebase Lintas Perangkat (Multi-Device Sync)
-    _initCloudDataInBackground();
 
     // Listener saat progress selesai -> Navigasi ke Login
     _progressController.addStatusListener((status) {
@@ -165,16 +148,6 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
     });
   }
 
-  void _initCloudDataInBackground() async {
-    // Jalankan sinkronisasi cloud Firebase di runtime aplikasi nyata (bukan saat widget test)
-    if (WidgetsBinding.instance is! WidgetsFlutterBinding) return;
-    try {
-      CloudSyncService.instance.syncAllFromCloud();
-    } catch (e) {
-      debugPrint('[SplashPage] Cloud startup sync info: $e');
-    }
-  }
-
   @override
   void dispose() {
     _introController.dispose();
@@ -182,7 +155,6 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
     _ringController.dispose();
     _progressController.dispose();
     _shimmerController.dispose();
-    _particleController.dispose();
     super.dispose();
   }
 
@@ -330,16 +302,8 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
             },
           ),
 
-          // 3. Cyber Matrix Floating Particles Canvas
-          AnimatedBuilder(
-            animation: _particleController,
-            builder: (context, child) {
-              return CustomPaint(
-                size: Size(size.width, size.height),
-                painter: AppParticlePainter(_particles),
-              );
-            },
-          ),
+          // 3. Cyber Matrix Floating Particles Canvas (Animated & GPU-isolated)
+          const CyberParticlesLayer(count: 14),
 
           // 4. Main Foreground UI
           SafeArea(

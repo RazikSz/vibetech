@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -10,6 +11,7 @@ import '../../constants/app_colors.dart';
 import '../../database/db_helper.dart';
 import '../../models/service_model.dart';
 import '../../services/cloud_sync_service.dart';
+import '../../services/firebase_transaction_service.dart';
 import '../../services/language_service.dart';
 import '../home/produk_page.dart';
 import '../services/data_bot_wa_page.dart';
@@ -47,9 +49,21 @@ class _DataLayananPageState extends State<DataLayananPage>
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   String _activeEmail = 'user@vibetech.com';
+  String _userRole = 'user';
   List<PurchasedService> _allServices = [];
-  bool _isLoading = true;
+  bool _isLoading = false;
   final Map<int, bool> _showPasswordMap = {};
+  Timer? _liveSyncTimer;
+  VoidCallback? _servicesRealtimeListener;
+
+  bool get _isAdmin {
+    final email = _activeEmail.toLowerCase();
+    final role = _userRole.toLowerCase();
+    return role == 'admin' ||
+        role == 'administrator' ||
+        email == 'admin@vibetech.com' ||
+        email == 'raziek';
+  }
 
   Color get _bgColor =>
       widget.isDarkMode ? AppColors.darkBg : AppColors.lightBg;
@@ -76,11 +90,33 @@ class _DataLayananPageState extends State<DataLayananPage>
         setState(() {});
       }
     });
+
+    // Pasang listener streaming real-time Firebase RTDB untuk layanan aktif
+    _servicesRealtimeListener = () async {
+      try {
+        final data =
+            await DatabaseHelper.instance.getServicesByUser(_activeEmail);
+        if (mounted) {
+          setState(() {
+            _allServices =
+                data.map((e) => PurchasedService.fromMap(e)).toList();
+          });
+        }
+      } catch (_) {}
+    };
+    CloudSyncService.instance.servicesNotifier
+        .addListener(_servicesRealtimeListener!);
+
     _initAndLoadServices();
   }
 
   @override
   void dispose() {
+    if (_servicesRealtimeListener != null) {
+      CloudSyncService.instance.servicesNotifier
+          .removeListener(_servicesRealtimeListener!);
+    }
+    _liveSyncTimer?.cancel();
     _tabController.dispose();
     _searchController.dispose();
     super.dispose();
@@ -90,23 +126,110 @@ class _DataLayananPageState extends State<DataLayananPage>
     try {
       final prefs = await SharedPreferences.getInstance();
       final savedEmail = prefs.getString('email');
+      final savedRole = prefs.getString('role');
       if (savedEmail != null && savedEmail.isNotEmpty) {
         _activeEmail = savedEmail;
+      }
+      if (savedRole != null && savedRole.isNotEmpty) {
+        _userRole = savedRole;
       }
     } catch (_) {}
     CloudSyncService.instance.syncAllFromCloud();
     await _loadServicesFromDB();
+
+    // Pasang Live Sync Timer cadangan untuk Data Layanan
+    _liveSyncTimer?.cancel();
+    _liveSyncTimer = Timer.periodic(const Duration(seconds: 20), (_) async {
+      if (mounted && !_isLoading) {
+        try {
+          await FirebaseTransactionService.instance
+              .syncServicesFromFirebase(userEmail: _activeEmail);
+          final data =
+              await DatabaseHelper.instance.getServicesByUser(_activeEmail);
+          if (mounted) {
+            setState(() {
+              _allServices =
+                  data.map((e) => PurchasedService.fromMap(e)).toList();
+            });
+          }
+        } catch (_) {}
+      }
+    });
   }
 
-  Future<void> _loadServicesFromDB() async {
+  Future<void> _loadServicesFromDB({bool showSyncToast = false}) async {
     if (!mounted) return;
-    setState(() => _isLoading = true);
-    final data = await DatabaseHelper.instance.getServicesByUser(_activeEmail);
-    if (mounted) {
-      setState(() {
-        _allServices = data.map((e) => PurchasedService.fromMap(e)).toList();
-        _isLoading = false;
-      });
+
+    // 1. Baca data termutakhir dari SQLite lokal terlebih dahulu (INSTAN 0ms)
+    try {
+      final localData = await DatabaseHelper.instance
+          .getServicesByUser(_activeEmail)
+          .timeout(const Duration(seconds: 3), onTimeout: () => []);
+      if (mounted) {
+        setState(() {
+          _allServices = localData.map((e) => PurchasedService.fromMap(e)).toList();
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('[DataLayananPage] Error read local: $e');
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+
+    // 2. Sinkronkan dari Firebase di latar belakang tanpa menahan antarmuka
+    try {
+      await FirebaseTransactionService.instance
+          .syncServicesFromFirebase(userEmail: _activeEmail)
+          .timeout(const Duration(seconds: 5), onTimeout: () => 0);
+      final freshData = await DatabaseHelper.instance
+          .getServicesByUser(_activeEmail)
+          .timeout(const Duration(seconds: 3), onTimeout: () => []);
+      if (mounted) {
+        setState(() {
+          _allServices = freshData.map((e) => PurchasedService.fromMap(e)).toList();
+          _isLoading = false;
+        });
+
+        if (showSyncToast) {
+          HapticFeedback.lightImpact();
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.cloud_done_rounded, color: Colors.white, size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      LanguageService.text(
+                        'Data layanan berhasil disinkronkan dari Firebase Realtime Database!',
+                        'Services synced from Firebase Realtime Database!',
+                      ),
+                      style: GoogleFonts.poppins(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              backgroundColor: AppColors.emerald,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('[DataLayananPage] Cloud sync error: $e');
+    } finally {
+      if (mounted && _isLoading) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -818,6 +941,19 @@ class _DataLayananPageState extends State<DataLayananPage>
   }
 
   void _showAddServiceDialog() {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat menambah data layanan manual.',
+            'Access Denied! Only Administrators can add manual service data.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
     String selectedCategory = 'VPS';
     final nameCtrl = TextEditingController(text: 'VPS Ubuntu 22.04');
     final ipCtrl = TextEditingController(
@@ -887,7 +1023,7 @@ class _DataLayananPageState extends State<DataLayananPage>
                         } else {
                           nameCtrl.text = 'Bot WA Multi-Device';
                           specsCtrl.text = '5 Grup, Auto-reply, Blast AI';
-                          userCtrl.text = widget.userEmail;
+                          userCtrl.text = _activeEmail;
                         }
                       });
                     }
@@ -947,7 +1083,7 @@ class _DataLayananPageState extends State<DataLayananPage>
                 if (nameCtrl.text.isEmpty) return;
                 final now = DateTime.now();
                 await DatabaseHelper.instance.createService({
-                  'user_email': widget.userEmail,
+                  'user_email': _activeEmail,
                   'nama_produk': nameCtrl.text,
                   'kategori': selectedCategory,
                   'harga': double.tryParse(priceCtrl.text) ?? 50000.0,
@@ -989,7 +1125,220 @@ class _DataLayananPageState extends State<DataLayananPage>
     );
   }
 
-  void _showDeleteConfirmDialog(int id, String name) {
+  void _showEditServiceDialog(PurchasedService srv) {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat mengubah konfigurasi layanan.',
+            'Access Denied! Only Administrators can edit service configuration.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    String selectedStatus = srv.status;
+    final nameCtrl = TextEditingController(text: srv.namaProduk);
+    final ipCtrl = TextEditingController(text: srv.ipAddress ?? srv.sessionId ?? srv.serverUrl ?? '');
+    final userCtrl = TextEditingController(text: srv.username ?? '');
+    final passCtrl = TextEditingController(text: srv.password ?? '');
+    final portCtrl = TextEditingController(text: srv.port ?? '');
+    final specsCtrl = TextEditingController(text: srv.spesifikasi ?? '');
+    final priceCtrl = TextEditingController(text: srv.harga.toInt().toString());
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (dContext, setDialogState) => AlertDialog(
+          backgroundColor: _cardColor,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              const Icon(Icons.edit_note_rounded, color: AppColors.accent, size: 24),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  LanguageService.text('Edit Data Layanan', 'Edit Service Data'),
+                  style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.bold, color: _textPrimary, fontSize: 16),
+                ),
+              ),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildDialogField(nameCtrl, 'Nama Layanan', Icons.inventory_2_rounded),
+                const SizedBox(height: 12),
+                if (srv.kategori.toLowerCase().contains('vps')) ...[
+                  _buildDialogField(ipCtrl, 'IP Address', Icons.language_rounded),
+                  const SizedBox(height: 12),
+                  _buildDialogField(portCtrl, 'Port SSH', Icons.numbers_rounded),
+                  const SizedBox(height: 12),
+                  _buildDialogField(userCtrl, 'User SSH', Icons.person_outline_rounded),
+                  const SizedBox(height: 12),
+                  _buildDialogField(passCtrl, 'Password Root', Icons.lock_outline_rounded),
+                ] else if (srv.kategori.toLowerCase().contains('panel')) ...[
+                  _buildDialogField(ipCtrl, 'URL Panel', Icons.link_rounded),
+                  const SizedBox(height: 12),
+                  _buildDialogField(userCtrl, 'Username Panel', Icons.person_outline_rounded),
+                  const SizedBox(height: 12),
+                  _buildDialogField(passCtrl, 'Password Panel', Icons.lock_outline_rounded),
+                ] else ...[
+                  _buildDialogField(ipCtrl, 'Session ID / Pairing', Icons.fingerprint_rounded),
+                  const SizedBox(height: 12),
+                  _buildDialogField(passCtrl, 'Pairing Code', Icons.qr_code_scanner_rounded),
+                ],
+                const SizedBox(height: 12),
+                _buildDialogField(specsCtrl, 'Spesifikasi / Catatan', Icons.memory_rounded),
+                const SizedBox(height: 12),
+                _buildDialogField(priceCtrl, 'Harga (Rp)', Icons.attach_money_rounded,
+                    keyboardType: TextInputType.number),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: selectedStatus,
+                  dropdownColor: _cardColor,
+                  style: GoogleFonts.poppins(color: _textPrimary, fontSize: 13),
+                  decoration: InputDecoration(
+                    labelText: 'Status Layanan',
+                    labelStyle: GoogleFonts.poppins(color: _textSecondary, fontSize: 13),
+                    filled: true,
+                    fillColor: widget.isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'Aktif', child: Text('Aktif (Online)')),
+                    DropdownMenuItem(value: 'Expired', child: Text('Expired (Kadaluarsa)')),
+                    DropdownMenuItem(value: 'Maintenance', child: Text('Maintenance (Perbaikan)')),
+                  ],
+                  onChanged: (val) {
+                    if (val != null) {
+                      setDialogState(() => selectedStatus = val);
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(LanguageService.tr('batal'),
+                  style: GoogleFonts.poppins(color: _textSecondary)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.accent,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: () async {
+                Navigator.pop(ctx);
+
+                final updatedData = {
+                  'id': srv.id,
+                  'user_email': srv.userEmail,
+                  'nama_produk': nameCtrl.text.trim().isNotEmpty ? nameCtrl.text.trim() : srv.namaProduk,
+                  'kategori': srv.kategori,
+                  'harga': double.tryParse(priceCtrl.text) ?? srv.harga,
+                  'status': selectedStatus,
+                  'ip_address': srv.kategori.toLowerCase().contains('vps') ? ipCtrl.text.trim() : srv.ipAddress,
+                  'port': portCtrl.text.trim().isNotEmpty ? portCtrl.text.trim() : srv.port,
+                  'username': userCtrl.text.trim(),
+                  'password': passCtrl.text.trim(),
+                  'server_url': srv.kategori.toLowerCase().contains('panel') ? ipCtrl.text.trim() : srv.serverUrl,
+                  'session_id': srv.kategori.toLowerCase().contains('bot') ? ipCtrl.text.trim() : srv.sessionId,
+                  'spesifikasi': specsCtrl.text.trim(),
+                  'tanggal_beli': srv.tanggalBeli,
+                  'tanggal_kadaluarsa': srv.tanggalKadaluarsa,
+                  'extra_data': srv.extraData,
+                };
+
+                // 1. Update UI secara instan (0ms) tanpa spinner loading
+                final updatedObj = PurchasedService.fromMap(updatedData);
+                setState(() {
+                  final idx = _allServices.indexWhere((s) =>
+                      (srv.id != null && s.id == srv.id) ||
+                      (s.namaProduk.toLowerCase() == srv.namaProduk.toLowerCase() &&
+                          s.userEmail.toLowerCase() == srv.userEmail.toLowerCase()));
+                  if (idx != -1) {
+                    _allServices[idx] = updatedObj;
+                  }
+                });
+
+                HapticFeedback.lightImpact();
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      LanguageService.text(
+                        'Data layanan berhasil diperbarui!',
+                        'Service data updated successfully!',
+                      ),
+                      style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                    backgroundColor: AppColors.emerald,
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+
+                // 2. Eksekusi simpan ke SQLite lokal & Firebase RTDB di latar belakang
+                Future.microtask(() async {
+                  try {
+                    final db = await DatabaseHelper.instance.database;
+                    if (srv.id != null && srv.id! > 0) {
+                      await db.update('purchased_services', updatedData,
+                          where: 'id = ?', whereArgs: [srv.id]);
+                    }
+                    await db.update(
+                      'purchased_services',
+                      updatedData,
+                      where: 'LOWER(user_email) = ? AND LOWER(nama_produk) = ?',
+                      whereArgs: [srv.userEmail.toLowerCase(), srv.namaProduk.toLowerCase()],
+                    );
+
+                    await FirebaseTransactionService.instance.updateServiceInFirebase(
+                      id: srv.id ?? 0,
+                      docId: srv.extraData,
+                      namaProduk: srv.namaProduk,
+                      userEmail: srv.userEmail,
+                      updatedData: updatedData,
+                    );
+                  } catch (e) {
+                    debugPrint('[DataLayananPage] Error edit background: $e');
+                  }
+                });
+              },
+              child: Text(LanguageService.tr('simpan'),
+                  style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showDeleteConfirmDialog(PurchasedService srv) {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat menghapus data layanan.',
+            'Access Denied! Only Administrators can delete service data.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1001,8 +1350,8 @@ class _DataLayananPageState extends State<DataLayananPage>
               fontWeight: FontWeight.bold, color: _textPrimary),
         ),
         content: Text(
-          LanguageService.text('Apakah Anda yakin ingin menghapus $name?',
-              'Are you sure you want to delete $name?'),
+          LanguageService.text('Apakah Anda yakin ingin menghapus ${srv.namaProduk}?',
+              'Are you sure you want to delete ${srv.namaProduk}?'),
           style: GoogleFonts.poppins(color: _textSecondary),
         ),
         actions: [
@@ -1018,10 +1367,58 @@ class _DataLayananPageState extends State<DataLayananPage>
                   borderRadius: BorderRadius.circular(12)),
             ),
             onPressed: () async {
-              await DatabaseHelper.instance.deleteService(id);
-              if (!ctx.mounted) return;
               Navigator.pop(ctx);
-              _loadServicesFromDB();
+
+              // 1. Update UI seketika (0ms - kartu langsung hilang tanpa muter-muter)
+              setState(() {
+                _allServices.removeWhere((s) =>
+                    (srv.id != null && s.id == srv.id) ||
+                    (s.namaProduk.toLowerCase() == srv.namaProduk.toLowerCase() &&
+                        s.userEmail.toLowerCase() == srv.userEmail.toLowerCase()));
+              });
+
+              HapticFeedback.mediumImpact();
+              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    LanguageService.text(
+                      'Layanan ${srv.namaProduk} berhasil dihapus!',
+                      'Service ${srv.namaProduk} deleted successfully!',
+                    ),
+                    style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                  backgroundColor: AppColors.error,
+                  behavior: SnackBarBehavior.floating,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+
+              // 2. Eksekusi Hapus dari SQLite lokal & Firebase RTDB di latar belakang
+              Future.microtask(() async {
+                try {
+                  final db = await DatabaseHelper.instance.database;
+                  if (srv.id != null && srv.id! > 0) {
+                    await db.delete('purchased_services',
+                        where: 'id = ?', whereArgs: [srv.id]);
+                  }
+                  await db.delete(
+                    'purchased_services',
+                    where: 'LOWER(user_email) = ? AND LOWER(nama_produk) = ?',
+                    whereArgs: [srv.userEmail.toLowerCase(), srv.namaProduk.toLowerCase()],
+                  );
+
+                  await FirebaseTransactionService.instance.deleteServiceFromFirebase(
+                    srv.id ?? 0,
+                    docId: srv.extraData,
+                    namaProduk: srv.namaProduk,
+                    userEmail: srv.userEmail,
+                  );
+                } catch (e) {
+                  debugPrint('[DataLayananPage] Error delete background: $e');
+                }
+              });
             },
             child: Text(LanguageService.tr('hapus'),
                 style: GoogleFonts.poppins(
@@ -1075,11 +1472,17 @@ class _DataLayananPageState extends State<DataLayananPage>
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.add_circle_outline_rounded,
-                color: AppColors.cyan),
-            onPressed: _showAddServiceDialog,
-            tooltip: LanguageService.tr('tambah_layanan'),
+            icon: const Icon(Icons.sync_rounded, color: AppColors.accent),
+            onPressed: () => _loadServicesFromDB(showSyncToast: true),
+            tooltip: LanguageService.text('Sinkronkan dari Firebase', 'Sync from Firebase'),
           ),
+          if (_isAdmin)
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline_rounded,
+                  color: AppColors.cyan),
+              onPressed: _showAddServiceDialog,
+              tooltip: LanguageService.tr('tambah_layanan'),
+            ),
         ],
         bottom: TabBar(
           controller: _tabController,
@@ -1203,9 +1606,7 @@ class _DataLayananPageState extends State<DataLayananPage>
 
           // Tab Bar Views
           Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : TabBarView(
+            child: TabBarView(
                     controller: _tabController,
                     children: [
                       _buildServiceListView(
@@ -1284,7 +1685,7 @@ class _DataLayananPageState extends State<DataLayananPage>
       }
 
       return RefreshIndicator(
-        onRefresh: _loadServicesFromDB,
+        onRefresh: () => _loadServicesFromDB(showSyncToast: true),
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
           children: [
@@ -1387,21 +1788,23 @@ class _DataLayananPageState extends State<DataLayananPage>
                       ),
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  TextButton.icon(
-                    onPressed: _showAddServiceDialog,
-                    icon: Icon(Icons.add_circle_outline_rounded,
-                        color: _textSecondary, size: 16),
-                    label: Text(
-                      LanguageService.text('Atau Tambah Kredensial Manual',
-                          'Or Add Credentials Manually'),
-                      style: GoogleFonts.poppins(
-                        color: _textSecondary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
+                  if (_isAdmin) ...[
+                    const SizedBox(height: 10),
+                    TextButton.icon(
+                      onPressed: _showAddServiceDialog,
+                      icon: Icon(Icons.add_circle_outline_rounded,
+                          color: _textSecondary, size: 16),
+                      label: Text(
+                        LanguageService.text('Atau Tambah Kredensial Manual',
+                            'Or Add Credentials Manually'),
+                        style: GoogleFonts.poppins(
+                          color: _textSecondary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
@@ -1412,7 +1815,7 @@ class _DataLayananPageState extends State<DataLayananPage>
     }
 
     return RefreshIndicator(
-      onRefresh: _loadServicesFromDB,
+      onRefresh: () => _loadServicesFromDB(showSyncToast: true),
       child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         itemCount: list.length + 1,
@@ -1907,14 +2310,20 @@ class _DataLayananPageState extends State<DataLayananPage>
                             fontSize: 14,
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline_rounded,
-                              color: AppColors.error, size: 20),
-                          onPressed: () => _showDeleteConfirmDialog(
-                              srv.id ?? 0, srv.namaProduk),
-                          tooltip: LanguageService.tr('hapus'),
-                        ),
+                        if (_isAdmin) ...[
+                          IconButton(
+                            icon: const Icon(Icons.edit_outlined,
+                                color: AppColors.accent, size: 20),
+                            onPressed: () => _showEditServiceDialog(srv),
+                            tooltip: LanguageService.text('Edit Layanan', 'Edit Service'),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline_rounded,
+                                color: AppColors.error, size: 20),
+                            onPressed: () => _showDeleteConfirmDialog(srv),
+                            tooltip: LanguageService.tr('hapus'),
+                          ),
+                        ],
                       ],
                     ),
                   ],

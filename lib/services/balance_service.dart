@@ -74,6 +74,7 @@ class BalanceService {
   /// Mengurangi saldo untuk akun tertentu saat melakukan transaksi pembayaran
   static Future<bool> deductBalance(int amount,
       {String? emailOrUsername}) async {
+    if (amount <= 0) return false;
     final target = (emailOrUsername ?? _activeUserIdentifier).trim();
 
     // Verifikasi ketersediaan saldo di database SQLite
@@ -100,6 +101,7 @@ class BalanceService {
 
   /// Menambahkan saldo untuk akun tertentu saat Top Up berhasil
   static Future<void> addBalance(int amount, {String? emailOrUsername}) async {
+    if (amount <= 0) return;
     final target = (emailOrUsername ?? _activeUserIdentifier).trim();
 
     final newDbBalance =

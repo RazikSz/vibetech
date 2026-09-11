@@ -27,9 +27,9 @@ void main() {
       expect(docId, isNotNull);
 
       // 2. Verifikasi langsung di endpoint Firebase RTDB
-      const url = 'https://vibetech-xyz-default-rtdb.asia-southeast1.firebasedatabase.app';
       final cleanKey = invoiceNo.replaceAll(RegExp(r'[/\\#?\[\]\.\$]'), '_');
-      final res = await http.get(Uri.parse('$url/transactions/$cleanKey.json'));
+      final txUri = await FirebaseTransactionService.buildTxRtdbUri('$cleanKey.json');
+      final res = await http.get(txUri);
 
       expect(res.statusCode, 200);
       expect(res.body, isNot('null'));
@@ -42,7 +42,7 @@ void main() {
       expect(data['status'], 'Selesai');
 
       // 3. Bersihkan data pengujian
-      await http.delete(Uri.parse('$url/transactions/$cleanKey.json'));
+      await http.delete(txUri);
     });
 
     test('Product purchase transaction updates from Pending to Selesai in Firebase RTDB', () async {
@@ -65,7 +65,7 @@ void main() {
       await FirebaseTransactionService.instance.saveTransactionToFirebase(pendingData);
 
       final cleanKey = invoiceNo.replaceAll(RegExp(r'[/\\#?\[\]\.\$]'), '_');
-      const url = 'https://vibetech-xyz-default-rtdb.asia-southeast1.firebasedatabase.app';
+      final txUri = await FirebaseTransactionService.buildTxRtdbUri('$cleanKey.json');
 
       // Update status ke Selesai
       await FirebaseTransactionService.instance.updateTransactionInFirebase(
@@ -73,7 +73,7 @@ void main() {
         updatedData: {'status': 'Selesai'},
       );
 
-      final res = await http.get(Uri.parse('$url/transactions/$cleanKey.json'));
+      final res = await http.get(txUri);
       expect(res.statusCode, 200);
       expect(res.body, isNot('null'));
 
@@ -81,7 +81,7 @@ void main() {
       expect(updatedData['status'], 'Selesai');
 
       // Bersihkan data pengujian
-      await http.delete(Uri.parse('$url/transactions/$cleanKey.json'));
+      await http.delete(txUri);
     });
   });
 }

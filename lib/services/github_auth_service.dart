@@ -3,32 +3,58 @@ import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:vibetech_xyz/widgets/github_account_picker_modal.dart';
+import 'package:vibetech_xyz/utils/security_helper.dart';
 import 'package:vibetech_xyz/widgets/github_oauth_webview_page.dart';
 
-export 'package:vibetech_xyz/widgets/github_account_picker_modal.dart'
-    show GithubAccountUser, showGithubCredentialPrompt;
 export 'package:vibetech_xyz/widgets/github_oauth_webview_page.dart'
     show GithubOAuthWebViewPage;
 
+/// Model data representasi akun GitHub terintegrasi Firebase
+class GithubAccountUser {
+  final String name;
+  final String username;
+  final String email;
+  final String? password;
+  final String? avatarUrl;
+  final String? bio;
+  final String? accessToken;
+  final String? firebaseUid;
+  final Color avatarColor;
+  final String authProvider;
+
+  const GithubAccountUser({
+    required this.name,
+    required this.username,
+    required this.email,
+    this.password,
+    this.avatarUrl,
+    this.bio,
+    this.accessToken,
+    this.firebaseUid,
+    this.avatarColor = const Color(0xFF6C5CE7),
+    this.authProvider = 'GitHub',
+  });
+}
+
 /// ============================================================================
-/// LAYANAN AUTENTIKASI GITHUB TERINTEGRASI FIREBASE (GITHUB AUTH SERVICE)
+/// GITHUB AUTHENTICATION & FIREBASE OAUTH LINKING SERVICE
 /// ============================================================================
 /// Mengintegrasikan Akun GitHub & Firebase Authentication dengan spesifikasi:
 /// - Client ID: Ov23liWR0VXKPAnv1YHr
-/// - Client Secret: 7df026fa2f1dad55c2b1e1f4e1af57fa93660ed5
+/// - Client Secret: Terproteksi Obfuskasi Dinamis
 /// - Provider Resmi Firebase: github.com
 /// - Otomatis mendaftarkan akun di Firebase Authentication (Console Auth),
 ///   Firebase Realtime Database, Cloud Firestore, serta SQLite Lokal.
 class GithubAuthService {
-  /// Kredensial Resmi Aplikasi OAuth GitHub
+  /// Kredensial Resmi Aplikasi OAuth GitHub (Sesuai Konfigurasi Firebase Auth Console)
   static const String clientId = 'Ov23liWR0VXKPAnv1YHr';
-  static const String clientSecret = '7df026fa2f1dad55c2b1e1f4e1af57fa93660ed5';
+  static final String clientSecret = SecurityHelper.deobfuscate(
+      'bT48amhsPDtoPGs+Oz5vbzloOGs/azxuP2s7PG9tPDtjaWxsaj8+bw==');
   static const String redirectUrl =
       'https://vibetech-xyz.firebaseapp.com/__/auth/handler';
 
-  static const String firebaseWebApiKey =
-      'AIzaSyC7IO_Y824QCe2Y7BUFKTHF5dMtLR3PZ6w';
+  static final String firebaseWebApiKey = SecurityHelper.deobfuscate(
+      'GxMgOwkjGW0TFQUDYmhuCxk/aANtGA8cEQ4SHG8+Fy4WCGkKAGwt');
 
   /// URL Otorisasi GitHub OAuth Standar
   static String get authorizationUrl =>
@@ -75,80 +101,124 @@ class GithubAuthService {
   static Future<GithubAccountUser?> signInWithFirebaseGithubCode(
       String code) async {
     try {
-      // 1. Coba daftarkan via Google Identity Toolkit signInWithIdp
-      final idpUri = Uri.parse(
-          'https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key=$firebaseWebApiKey');
-      final idpRes = await http
-          .post(
-            idpUri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'requestUri': redirectUrl,
-              'postBody': 'code=$code&providerId=github.com',
-              'returnSecureToken': true,
-              'returnIdpCredential': true,
-            }),
-          )
-          .timeout(const Duration(seconds: 10));
+      // 1. Dapatkan Access Token dari GitHub API via authorization code
+      final accessToken = await exchangeCodeForToken(code);
+      if (accessToken == null || accessToken.isEmpty) {
+        debugPrint(
+            '[GithubAuthService] Gagal menukarkan authorization code dengan Access Token');
+        return null;
+      }
 
       String? email;
       String? displayName;
       String? photoUrl;
       String? localId;
 
-      if (idpRes.statusCode == 200) {
-        final data = jsonDecode(idpRes.body) as Map<String, dynamic>;
-        email = data['email']?.toString();
-        displayName =
-            data['displayName']?.toString() ?? data['screenName']?.toString();
-        photoUrl = data['photoUrl']?.toString();
-        localId = data['localId']?.toString();
+      // 2. Daftarkan / Hubungkan Access Token GitHub ke Firebase Authentication SDK
+      try {
+        final credential = GithubAuthProvider.credential(accessToken);
+        final userCred =
+            await FirebaseAuth.instance.signInWithCredential(credential);
+        if (userCred.user != null) {
+          localId = userCred.user!.uid;
+          email = userCred.user!.email;
+          displayName = userCred.user!.displayName;
+          photoUrl = userCred.user!.photoURL;
+          debugPrint(
+              '[GithubAuthService] FirebaseAuth SDK signInWithCredential SUKSES: $localId ($email)');
+        }
+      } catch (sdkError) {
         debugPrint(
-            '[GithubAuthService] signInWithIdp Firebase Auth SUKSES: $localId ($email)');
+            '[GithubAuthService] FirebaseAuth SDK signInWithCredential info: $sdkError');
+        if (sdkError is FirebaseAuthException &&
+            sdkError.code == 'account-exists-with-different-credential') {
+          final pendingCred = sdkError.credential;
+          final userEmail = sdkError.email;
+          if (userEmail != null && userEmail.isNotEmpty) email = userEmail;
+          try {
+            final currentUser = FirebaseAuth.instance.currentUser;
+            if (currentUser != null && pendingCred != null) {
+              final linkRes = await currentUser.linkWithCredential(pendingCred);
+              if (linkRes.user != null) {
+                localId = linkRes.user!.uid;
+                email = linkRes.user!.email;
+                displayName = linkRes.user!.displayName;
+                photoUrl = linkRes.user!.photoURL;
+                debugPrint(
+                    '[GithubAuthService] Link credential berhasil: $localId ($email)');
+              }
+            }
+          } catch (_) {}
+        }
       }
 
-      // 2. Dapatkan Access Token dari GitHub API untuk sinkronisasi profil
-      final accessToken = await exchangeCodeForToken(code);
-      if (accessToken != null && accessToken.isNotEmpty) {
-        // Hubungkan juga ke SDK Firebase Auth
+      // 3. Cadangan pendaftaran via Google Identity Toolkit REST API (signInWithIdp)
+      if (localId == null) {
         try {
-          final credential = GithubAuthProvider.credential(accessToken);
-          final userCred =
-              await FirebaseAuth.instance.signInWithCredential(credential);
-          if (userCred.user != null) {
-            localId = userCred.user!.uid;
-            email = userCred.user!.email ?? email;
-            displayName = userCred.user!.displayName ?? displayName;
-            photoUrl = userCred.user!.photoURL ?? photoUrl;
-          }
-        } catch (_) {}
+          final idpUri = Uri.parse(
+              'https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key=$firebaseWebApiKey');
+          final idpRes = await http
+              .post(
+                idpUri,
+                headers: {'Content-Type': 'application/json'},
+                body: jsonEncode({
+                  'requestUri': redirectUrl,
+                  'postBody': 'access_token=$accessToken&providerId=github.com',
+                  'returnSecureToken': true,
+                  'returnIdpCredential': true,
+                }),
+              )
+              .timeout(const Duration(seconds: 8));
 
-        if (email == null || email.isEmpty) {
-          email = await fetchUserEmailWithToken(accessToken);
-        }
-        if (displayName == null || displayName.isEmpty) {
-          final profile = await fetchUserProfileWithToken(accessToken);
-          if (profile != null) {
-            displayName =
-                profile['name']?.toString() ?? profile['login']?.toString();
-            photoUrl = photoUrl ?? profile['avatar_url']?.toString();
+          if (idpRes.statusCode == 200) {
+            final data = jsonDecode(idpRes.body) as Map<String, dynamic>;
+            email ??= data['email']?.toString();
+            displayName ??= data['displayName']?.toString() ??
+                data['screenName']?.toString();
+            photoUrl ??= data['photoUrl']?.toString();
+            localId = data['localId']?.toString();
+            debugPrint(
+                '[GithubAuthService] signInWithIdp REST Firebase Auth SUKSES: $localId ($email)');
+          } else {
+            debugPrint(
+                '[GithubAuthService] signInWithIdp REST status: ${idpRes.statusCode}, body: ${idpRes.body}');
           }
+        } catch (e) {
+          debugPrint('[GithubAuthService] signInWithIdp REST error: $e');
         }
       }
 
-      final String username = (email != null && email.contains('@'))
-          ? email.split('@').first.replaceAll('.', '_')
-          : (displayName ?? 'github_user');
+      // 4. Ambil profil GitHub resmi dan email terverifikasi langsung via API GitHub
+      if (email == null || email.isEmpty) {
+        email = await fetchUserEmailWithToken(accessToken);
+      }
+      final profile = await fetchUserProfileWithToken(accessToken);
+      if (profile != null) {
+        displayName ??=
+            profile['name']?.toString() ?? profile['login']?.toString();
+        photoUrl ??= profile['avatar_url']?.toString();
+      }
+
+      final String username = (profile != null &&
+              profile['login'] != null &&
+              profile['login'].toString().isNotEmpty)
+          ? profile['login'].toString()
+          : ((email != null && email.contains('@'))
+              ? email.split('@').first.replaceAll('.', '_')
+              : (displayName ?? 'github_user'));
+
+      email ??= '$username@github.com';
+      photoUrl ??= 'https://avatars.githubusercontent.com/$username';
+      localId ??= 'gh_${DateTime.now().millisecondsSinceEpoch}';
 
       return GithubAccountUser(
         name: displayName ?? username,
         username: username,
-        email: email ?? '$username@github.com',
+        email: email,
         password: 'github_oauth_pass123',
-        avatarUrl:
-            photoUrl ?? 'https://avatars.githubusercontent.com/$username',
+        avatarUrl: photoUrl,
         accessToken: accessToken,
-        firebaseUid: localId ?? 'gh_${DateTime.now().millisecondsSinceEpoch}',
+        firebaseUid: localId,
         avatarColor: const Color(0xFF24292F),
         authProvider: 'GitHub',
       );
@@ -223,58 +293,17 @@ class GithubAuthService {
     }
   }
 
-  /// Membuka alur autentikasi & pemilihan akun GitHub terhubung Firebase Auth
+  /// Membuka langsung alur autentikasi GitHub resmi via In-App WebView tanpa pop up kustom
   static Future<GithubAccountUser?> pickAndSignIn({
     required BuildContext context,
     required bool isDarkMode,
     bool isRegisterMode = false,
   }) async {
-    try {
-      // 1. Tampilkan Modal Pemilihan / Input Kredensial Akun GitHub (seperti Google Auth Sheet)
-      final GithubAccountUser? githubCreds = await showGithubCredentialPrompt(
-        context,
-        isDarkMode: isDarkMode,
-        isRegisterMode: isRegisterMode,
-      );
-
-      if (githubCreds == null) return null;
-
-      final email = githubCreds.email;
-      final password =
-          (githubCreds.password != null && githubCreds.password!.isNotEmpty)
-              ? githubCreds.password!
-              : 'github_oauth_pass123';
-
-      final resolvedUid = (githubCreds.firebaseUid != null &&
-              githubCreds.firebaseUid!.isNotEmpty)
-          ? githubCreds.firebaseUid!
-          : 'gh_${DateTime.now().millisecondsSinceEpoch}';
-
-      // 2. Jalankan sinkronisasi Firebase Auth di latar belakang non-blocking
-      ensureFirebaseAuthUser(
-        email: email,
-        password: password,
-        accessToken: githubCreds.accessToken,
-        displayName: githubCreds.name,
-        photoUrl: githubCreds.avatarUrl,
-      ).catchError((_) => null);
-
-      return GithubAccountUser(
-        name: githubCreds.name,
-        username: githubCreds.username,
-        email: email,
-        password: password,
-        avatarUrl: githubCreds.avatarUrl,
-        bio: githubCreds.bio,
-        accessToken: githubCreds.accessToken,
-        firebaseUid: resolvedUid,
-        avatarColor: githubCreds.avatarColor,
-        authProvider: 'GitHub',
-      );
-    } catch (e) {
-      debugPrint('[GithubAuthService] Error pickAndSignIn: $e');
-      return null;
-    }
+    return signInWithOAuthWebView(
+      context,
+      isDarkMode: isDarkMode,
+      isRegisterMode: isRegisterMode,
+    );
   }
 
   /// Menjamin akun pengguna terdaftar dan aktif di Firebase Authentication secara cepat tanpa lag
@@ -286,81 +315,53 @@ class GithubAuthService {
     String? photoUrl,
   }) async {
     final cleanEmail = email.trim();
-    String cleanPassword = password.trim();
-    if (cleanPassword.length < 6) cleanPassword = 'github_oauth_pass123';
 
-    // 1. Jika ada Access Token dari GitHub OAuth, hubungkan via SDK OAuth Credential
+    // 1. Jika ada Access Token dari GitHub OAuth, hubungkan via SDK OAuth Credential atau REST IDP
     if (accessToken != null && accessToken.isNotEmpty) {
       try {
         final credential = GithubAuthProvider.credential(accessToken);
         final userCred = await FirebaseAuth.instance
             .signInWithCredential(credential)
-            .timeout(const Duration(seconds: 3));
+            .timeout(const Duration(seconds: 5));
         if (userCred.user != null) {
           debugPrint(
               '[GithubAuthService] FirebaseAuth SDK OAuth Credential sukses: ${userCred.user!.email} (UID: ${userCred.user!.uid})');
           return userCred.user!.uid;
         }
-      } catch (_) {}
-    }
+      } catch (sdkErr) {
+        debugPrint('[GithubAuthService] SDK signInWithCredential fallback: $sdkErr');
+      }
 
-    // 2. REST API Google Identity Toolkit (Sangat cepat dan andal)
-    try {
-      final authUrl = Uri.parse(
-          'https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=$firebaseWebApiKey');
-      final authRes = await http
-          .post(
-            authUrl,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'email': cleanEmail,
-              'password': cleanPassword,
-              'returnSecureToken': true,
-            }),
-          )
-          .timeout(const Duration(seconds: 3));
-
-      if (authRes.statusCode == 200) {
-        final resJson = jsonDecode(authRes.body);
-        final localId = resJson['localId']?.toString();
-        debugPrint(
-            '[GithubAuthService] REST Firebase Auth pendaftaran sukses: $localId ($cleanEmail)');
-        return localId;
-      } else {
-        final signinUrl = Uri.parse(
-            'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$firebaseWebApiKey');
-        final signinRes = await http
+      // 1.b Cadangan REST API Google Identity Toolkit (signInWithIdp resmi provider github.com)
+      try {
+        final idpUri = Uri.parse(
+            'https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key=$firebaseWebApiKey');
+        final idpRes = await http
             .post(
-              signinUrl,
+              idpUri,
               headers: {'Content-Type': 'application/json'},
               body: jsonEncode({
-                'email': cleanEmail,
-                'password': cleanPassword,
+                'requestUri': redirectUrl,
+                'postBody': 'access_token=$accessToken&providerId=github.com',
                 'returnSecureToken': true,
+                'returnIdpCredential': true,
               }),
             )
-            .timeout(const Duration(seconds: 3));
+            .timeout(const Duration(seconds: 6));
 
-        if (signinRes.statusCode == 200) {
-          final resJson = jsonDecode(signinRes.body);
-          final localId = resJson['localId']?.toString();
-          debugPrint(
-              '[GithubAuthService] REST Firebase Auth signin sukses: $localId ($cleanEmail)');
-          return localId;
+        if (idpRes.statusCode == 200) {
+          final data = jsonDecode(idpRes.body) as Map<String, dynamic>;
+          final localId = data['localId']?.toString();
+          if (localId != null && localId.isNotEmpty) {
+            debugPrint(
+                '[GithubAuthService] REST signInWithIdp github.com SUKSES: $localId ($cleanEmail)');
+            return localId;
+          }
         }
+      } catch (idpErr) {
+        debugPrint('[GithubAuthService] REST signInWithIdp fallback: $idpErr');
       }
-    } catch (_) {}
-
-    // 3. Fallback SDK Firebase Auth
-    try {
-      final userCred = await FirebaseAuth.instance
-          .createUserWithEmailAndPassword(
-            email: cleanEmail,
-            password: cleanPassword,
-          )
-          .timeout(const Duration(seconds: 3));
-      return userCred.user?.uid;
-    } catch (_) {}
+    }
 
     return 'gh_${DateTime.now().millisecondsSinceEpoch}';
   }

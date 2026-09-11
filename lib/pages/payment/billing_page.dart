@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -11,6 +12,7 @@ import 'package:vibetech_xyz/database/db_helper.dart';
 import 'package:vibetech_xyz/pages/home/produk_page.dart';
 import 'package:vibetech_xyz/pages/payment/pembayaran_page.dart';
 import 'package:vibetech_xyz/services/cloud_sync_service.dart';
+import 'package:vibetech_xyz/services/firebase_transaction_service.dart';
 import 'package:vibetech_xyz/services/language_service.dart';
 
 /// ============================================================================
@@ -54,7 +56,7 @@ class _BillingPageState extends State<BillingPage>
   // Tab controller untuk beralih antara 'Semua Invoice', 'Tagihan Tertunda', dan 'Layanan Aktif'
   late TabController _tabController;
   late bool _isDarkMode;
-  bool _isLoading = true;
+  bool _isSyncingCloud = false;
 
   // Data identitas akun aktif yang sedang login
   String _activeUsername = '';
@@ -109,6 +111,9 @@ class _BillingPageState extends State<BillingPage>
     decimalDigits: 0,
   );
 
+  Timer? _liveSyncTimer;
+  VoidCallback? _billingRealtimeListener;
+
   @override
   void initState() {
     super.initState();
@@ -153,11 +158,29 @@ class _BillingPageState extends State<BillingPage>
       initialIndex: initialTabIndex,
     );
 
+    // Hubungkan listener streaming real-time Firebase RTDB untuk transaksi & layanan
+    _billingRealtimeListener = () async {
+      if (mounted) {
+        await _loadBillingDataFromDB(triggerCloudSync: false);
+      }
+    };
+    CloudSyncService.instance.transactionsNotifier
+        .addListener(_billingRealtimeListener!);
+    CloudSyncService.instance.servicesNotifier
+        .addListener(_billingRealtimeListener!);
+
     _initUserDataAndLoad();
   }
 
   @override
   void dispose() {
+    if (_billingRealtimeListener != null) {
+      CloudSyncService.instance.transactionsNotifier
+          .removeListener(_billingRealtimeListener!);
+      CloudSyncService.instance.servicesNotifier
+          .removeListener(_billingRealtimeListener!);
+    }
+    _liveSyncTimer?.cancel();
     _tabController.dispose();
     _particleController.dispose();
     _pulseController.dispose();
@@ -167,7 +190,6 @@ class _BillingPageState extends State<BillingPage>
   }
 
   Future<void> _initUserDataAndLoad() async {
-    setState(() => _isLoading = true);
     try {
       await initializeDateFormatting('id_ID', null);
       final prefs = await SharedPreferences.getInstance();
@@ -191,17 +213,24 @@ class _BillingPageState extends State<BillingPage>
       _currentUserRole = role.toLowerCase();
 
       await _loadBillingDataFromDB();
+
+      // Pasang fallback periodic sync (sebagai cadangan terhadap streaming listener)
+      _liveSyncTimer?.cancel();
+      _liveSyncTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+        if (mounted && !_isSyncingCloud) {
+          _syncWithFirebaseCloudInBackground();
+        }
+      });
     } catch (e) {
       debugPrint('Error initializing billing page: $e');
     } finally {
       if (mounted) {
-        setState(() => _isLoading = false);
         _listAnimController.forward(from: 0.0);
       }
     }
   }
 
-  Future<void> _loadBillingDataFromDB() async {
+  Future<void> _loadBillingDataFromDB({bool triggerCloudSync = true}) async {
     try {
       await DatabaseHelper.instance.cleanupDuplicateTransactions();
       // 1. Ambil data transaksi/invoice dari SQLite lokal
@@ -228,8 +257,10 @@ class _BillingPageState extends State<BillingPage>
       _calculateStats();
       _applyFilters();
 
-      // 3. Sinkronisasi dua arah otomatis dengan Firebase Cloud di latar belakang (Non-blocking)
-      _syncWithFirebaseCloudInBackground();
+      // 3. Sinkronisasi dua arah otomatis dengan Firebase Cloud di latar belakang (Non-blocking) jika diizinkan
+      if (triggerCloudSync && !_isSyncingCloud) {
+        _syncWithFirebaseCloudInBackground();
+      }
     } catch (e) {
       debugPrint('Error loading billing data: $e');
     }
@@ -267,14 +298,28 @@ class _BillingPageState extends State<BillingPage>
   }
 
   Future<void> _syncWithFirebaseCloudInBackground() async {
+    if (_isSyncingCloud) return;
+    _isSyncingCloud = true;
     try {
-      await CloudSyncService.instance.syncAllFromCloud();
+      if (_isAdmin) {
+        await Future.wait([
+          FirebaseTransactionService.instance.syncTransactionsFromFirebase(),
+          FirebaseTransactionService.instance.syncServicesFromFirebase(),
+        ]).timeout(const Duration(seconds: 5), onTimeout: () => []);
+      } else {
+        await Future.wait([
+          FirebaseTransactionService.instance
+              .syncTransactionsFromFirebase(userEmail: _activeEmail),
+          FirebaseTransactionService.instance
+              .syncServicesFromFirebase(userEmail: _activeEmail),
+        ]).timeout(const Duration(seconds: 5), onTimeout: () => []);
+      }
 
       if (mounted) {
-        List<Map<String, dynamic>> rawTransactions = _isAdmin
+        final rawTransactions = _isAdmin
             ? await DatabaseHelper.instance.getAllTransactions()
             : await DatabaseHelper.instance.getTransactionsByUser(_activeEmail);
-        List<Map<String, dynamic>> rawServices = _isAdmin
+        final rawServices = _isAdmin
             ? await DatabaseHelper.instance.getAllServices()
             : await DatabaseHelper.instance.getServicesByUser(_activeEmail);
 
@@ -289,6 +334,52 @@ class _BillingPageState extends State<BillingPage>
       }
     } catch (e) {
       debugPrint('[BillingPage] Firebase auto-sync info: $e');
+    } finally {
+      _isSyncingCloud = false;
+    }
+  }
+
+  /// Sinkronisasi manual satu pintu ke Firebase RTDB & Firestore
+  Future<void> _manualSyncCloud() async {
+    if (_isSyncingCloud) return;
+    setState(() => _isSyncingCloud = true);
+    HapticFeedback.mediumImpact();
+
+    try {
+      await CloudSyncService.instance.syncAllFromCloud();
+      await _loadBillingDataFromDB();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.cloud_done_rounded,
+                    color: Colors.white, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    LanguageService.text(
+                      'Pusat Tagihan berhasil disinkronkan dengan Firebase RTDB & SQLite!',
+                      'Billing Center synced with Firebase RTDB & SQLite!',
+                    ),
+                    style: GoogleFonts.poppins(fontSize: 12.5),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: AppColors.primary,
+            behavior: SnackBarBehavior.floating,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Manual cloud sync error: $e');
+    } finally {
+      if (mounted) setState(() => _isSyncingCloud = false);
     }
   }
 
@@ -480,6 +571,8 @@ class _BillingPageState extends State<BillingPage>
                             fontWeight: FontWeight.w700,
                             fontSize: 16,
                           ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                         Text(
                           formattedDate,
@@ -487,10 +580,13 @@ class _BillingPageState extends State<BillingPage>
                             color: _textSecondary,
                             fontSize: 12,
                           ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ],
                     ),
                   ),
+                  const SizedBox(width: 8),
                   _buildStatusBadge(status),
                 ],
               ),
@@ -630,11 +726,514 @@ class _BillingPageState extends State<BillingPage>
                     ),
                 ],
               ),
-              const SizedBox(height: 10),
+              // Tombol Edit & Hapus Tagihan khusus Administrator
+              if (_isAdmin) ...[
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.pop(modalCtx);
+                          _showEditInvoiceDialog(item);
+                        },
+                        icon: const Icon(Icons.edit_note_rounded,
+                            color: AppColors.primary, size: 18),
+                        label: Text(
+                          LanguageService.text('Edit Tagihan', 'Edit Invoice'),
+                          style: GoogleFonts.poppins(
+                            color: AppColors.primary,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(
+                              color: AppColors.primary.withValues(alpha: 0.5)),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.pop(modalCtx);
+                          _showDeleteInvoiceConfirmation(item);
+                        },
+                        icon: const Icon(Icons.delete_outline_rounded,
+                            color: AppColors.error, size: 18),
+                        label: Text(
+                          LanguageService.text('Hapus Tagihan', 'Delete Invoice'),
+                          style: GoogleFonts.poppins(
+                            color: AppColors.error,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(
+                              color: AppColors.error.withValues(alpha: 0.5)),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 6),
             ],
           ),
         );
       },
+    );
+  }
+
+  void _showDeleteInvoiceConfirmation(Map<String, dynamic> item) {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat menghapus tagihan.',
+            'Access Denied! Only Administrators can delete invoices.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    final int id = (item['id'] as num?)?.toInt() ?? 0;
+    final String invoiceNo = (item['invoice_no'] ?? '').toString();
+    final String prodName = item['nama_produk']?.toString() ?? 'Layanan';
+    final String email = item['user_email']?.toString() ?? '';
+
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: _cardColor,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: AppColors.error.withValues(alpha: 0.3)),
+        ),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.error.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.delete_forever_rounded,
+                  color: AppColors.error, size: 22),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                LanguageService.text('Hapus Tagihan?', 'Delete Invoice?'),
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                  color: _textPrimary,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          LanguageService.text(
+            'Apakah Anda yakin ingin menghapus tagihan ${invoiceNo.isNotEmpty ? invoiceNo : "#$id"} ($prodName)? Tagihan akan dihapus permanen dari SQLite & Firebase Cloud RTDB.',
+            'Are you sure you want to delete invoice ${invoiceNo.isNotEmpty ? invoiceNo : "#$id"} ($prodName)? It will be permanently removed from SQLite and Firebase RTDB.',
+          ),
+          style: GoogleFonts.poppins(color: _textSecondary, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: Text(
+              LanguageService.text('Batal', 'Cancel'),
+              style: GoogleFonts.poppins(color: _textSecondary),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              HapticFeedback.heavyImpact();
+              Navigator.of(dialogCtx, rootNavigator: true).pop();
+
+              // Optimistic UI update
+              setState(() {
+                _allInvoices.removeWhere((t) {
+                  final tInv = (t['invoice_no'] ?? '').toString().trim();
+                  final tId = (t['id'] as num?)?.toInt();
+                  if (invoiceNo.isNotEmpty &&
+                      (tInv == invoiceNo ||
+                          tInv == invoiceNo.replaceAll('INV-', ''))) {
+                    return true;
+                  }
+                  if (id > 0 && tId == id) return true;
+                  return false;
+                });
+                _calculateStats();
+                _applyFilters();
+              });
+
+              // SQLite & Firebase delete
+              try {
+                if (id > 0) {
+                  await DatabaseHelper.instance
+                      .deleteTransaction(id, invoiceNo: invoiceNo);
+                } else if (invoiceNo.isNotEmpty) {
+                  await DatabaseHelper.instance
+                      .deleteTransactionByInvoice(invoiceNo);
+                } else {
+                  await FirebaseTransactionService.instance
+                      .deleteTransactionFromFirebase(
+                    invoiceNo: invoiceNo,
+                    localId: id > 0 ? id : null,
+                    namaProduk: prodName,
+                    userEmail: email,
+                  );
+                }
+              } catch (e) {
+                debugPrint('[BillingPage] Delete invoice error: $e');
+              }
+
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      LanguageService.text(
+                        'Tagihan ${invoiceNo.isNotEmpty ? invoiceNo : "#$id"} berhasil dihapus permanen.',
+                        'Invoice ${invoiceNo.isNotEmpty ? invoiceNo : "#$id"} deleted permanently.',
+                      ),
+                      style: GoogleFonts.poppins(),
+                    ),
+                    backgroundColor: AppColors.error,
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.error,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: Text(
+              LanguageService.text('Hapus Permanen', 'Delete Permanently'),
+              style: GoogleFonts.poppins(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showEditInvoiceDialog(Map<String, dynamic> item) {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat mengubah invoice tagihan.',
+            'Access Denied! Only Administrators can edit billing invoices.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    final formKey = GlobalKey<FormState>();
+    final int id = (item['id'] as num?)?.toInt() ?? 0;
+    final String oldInvoice = (item['invoice_no'] ?? '').toString();
+    final nameCtrl =
+        TextEditingController(text: item['nama_produk']?.toString() ?? '');
+    final priceCtrl = TextEditingController(
+        text: ((item['total_harga'] as num?)?.toDouble() ?? 0.0)
+            .toStringAsFixed(0));
+    final qtyCtrl = TextEditingController(
+        text: ((item['jumlah'] as num?)?.toInt() ?? 1).toString());
+    final invoiceCtrl = TextEditingController(text: oldInvoice);
+    final emailCtrl = TextEditingController(
+        text: item['user_email']?.toString() ?? _activeEmail);
+    final notesCtrl =
+        TextEditingController(text: item['notes']?.toString() ?? '');
+    String status = item['status']?.toString() ?? 'Selesai';
+    String paymentMethod =
+        item['payment_method']?.toString() ?? 'Saldo VibeWallet';
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (sbContext, setDialogState) {
+          return AlertDialog(
+            backgroundColor: _cardColor,
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+              side: BorderSide(color: AppColors.primary.withValues(alpha: 0.3)),
+            ),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                        colors: [AppColors.primary, AppColors.cyan]),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.edit_note_rounded,
+                      color: Colors.white, size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    LanguageService.text(
+                        'Edit Invoice Tagihan', 'Edit Billing Invoice'),
+                    style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                      color: _textPrimary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 440,
+              child: Form(
+                key: formKey,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextFormField(
+                        controller: invoiceCtrl,
+                        style: GoogleFonts.poppins(
+                            color: _textPrimary, fontSize: 13),
+                        decoration: InputDecoration(
+                          labelText: LanguageService.text(
+                              'Nomor Invoice', 'Invoice No'),
+                          prefixIcon:
+                              const Icon(Icons.receipt_rounded, size: 18),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: nameCtrl,
+                        style: GoogleFonts.poppins(
+                            color: _textPrimary, fontSize: 13),
+                        decoration: InputDecoration(
+                          labelText: LanguageService.text(
+                              'Nama Layanan / Produk',
+                              'Service / Product Name'),
+                          prefixIcon:
+                              const Icon(Icons.inventory_2_rounded, size: 18),
+                        ),
+                        validator: (v) => (v == null || v.trim().isEmpty)
+                            ? 'Wajib diisi'
+                            : null,
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextFormField(
+                              controller: priceCtrl,
+                              keyboardType: TextInputType.number,
+                              style: GoogleFonts.poppins(
+                                  color: _textPrimary, fontSize: 13),
+                              decoration: const InputDecoration(
+                                labelText: 'Total Harga (Rp)',
+                                prefixIcon: Icon(Icons.monetization_on_rounded,
+                                    size: 18),
+                              ),
+                              validator: (v) => (v == null ||
+                                      double.tryParse(v.trim()) == null)
+                                  ? 'Nominal tidak valid'
+                                  : null,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: TextFormField(
+                              controller: qtyCtrl,
+                              keyboardType: TextInputType.number,
+                              style: GoogleFonts.poppins(
+                                  color: _textPrimary, fontSize: 13),
+                              decoration: const InputDecoration(
+                                labelText: 'Jumlah (Qty)',
+                                prefixIcon: Icon(
+                                    Icons.format_list_numbered_rounded,
+                                    size: 18),
+                              ),
+                              validator: (v) =>
+                                  (v == null || int.tryParse(v.trim()) == null)
+                                      ? 'Qty tidak valid'
+                                      : null,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue: ['Selesai', 'Pending', 'Dibatalkan']
+                                .contains(status)
+                            ? status
+                            : 'Selesai',
+                        decoration: InputDecoration(
+                          labelText: LanguageService.text(
+                              'Status Pembayaran', 'Payment Status'),
+                          prefixIcon:
+                              const Icon(Icons.verified_rounded, size: 18),
+                        ),
+                        dropdownColor: _cardColor,
+                        style: GoogleFonts.poppins(
+                            color: _textPrimary, fontSize: 13),
+                        items: ['Selesai', 'Pending', 'Dibatalkan']
+                            .map((s) =>
+                                DropdownMenuItem(value: s, child: Text(s)))
+                            .toList(),
+                        onChanged: (val) {
+                          if (val != null) setDialogState(() => status = val);
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: emailCtrl,
+                        style: GoogleFonts.poppins(
+                            color: _textPrimary, fontSize: 13),
+                        decoration: InputDecoration(
+                          labelText: LanguageService.text(
+                              'Email Pelanggan', 'Customer Email'),
+                          prefixIcon: const Icon(Icons.email_rounded, size: 18),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: notesCtrl,
+                        style: GoogleFonts.poppins(
+                            color: _textPrimary, fontSize: 13),
+                        decoration: InputDecoration(
+                          labelText: LanguageService.text(
+                              'Catatan / Keterangan', 'Notes'),
+                          prefixIcon: const Icon(Icons.note_rounded, size: 18),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogCtx),
+                child: Text(
+                  LanguageService.text('Batal', 'Cancel'),
+                  style: GoogleFonts.poppins(color: _textSecondary),
+                ),
+              ),
+              ElevatedButton.icon(
+                onPressed: () async {
+                  if (formKey.currentState?.validate() ?? false) {
+                    final newInvoice = invoiceCtrl.text.trim();
+                    final updatedData = {
+                      'invoice_no':
+                          newInvoice.isNotEmpty ? newInvoice : oldInvoice,
+                      'nama_produk': nameCtrl.text.trim(),
+                      'jumlah': int.tryParse(qtyCtrl.text.trim()) ?? 1,
+                      'total_harga':
+                          double.tryParse(priceCtrl.text.trim()) ?? 0.0,
+                      'status': status,
+                      'payment_method': paymentMethod,
+                      'user_email': emailCtrl.text.trim(),
+                      'notes': notesCtrl.text.trim(),
+                      'tanggal':
+                          item['tanggal'] ?? DateTime.now().toIso8601String(),
+                    };
+
+                    Navigator.of(dialogCtx, rootNavigator: true).pop();
+
+                    // Optimistic update
+                    setState(() {
+                      final idx = _allInvoices.indexWhere((t) =>
+                          (id > 0 && (t['id'] as num?)?.toInt() == id) ||
+                          (oldInvoice.isNotEmpty &&
+                              t['invoice_no'] == oldInvoice));
+                      if (idx != -1) {
+                        _allInvoices[idx] = {
+                          ..._allInvoices[idx],
+                          ...updatedData,
+                        };
+                      }
+                      _calculateStats();
+                      _applyFilters();
+                    });
+
+                    // Save SQLite & Firebase
+                    try {
+                      if (id > 0) {
+                        await DatabaseHelper.instance
+                            .updateTransaction(id, updatedData);
+                      } else {
+                        await FirebaseTransactionService.instance
+                            .updateTransactionInFirebase(
+                          invoiceNo:
+                              oldInvoice.isNotEmpty ? oldInvoice : newInvoice,
+                          localId: id > 0 ? id : null,
+                          namaProduk: nameCtrl.text.trim(),
+                          userEmail: emailCtrl.text.trim(),
+                          updatedData: updatedData,
+                        );
+                      }
+                    } catch (e) {
+                      debugPrint('[BillingPage] Update invoice error: $e');
+                    }
+
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          LanguageService.text(
+                            'Tagihan $newInvoice berhasil diperbarui ke SQLite & Firebase RTDB!',
+                            'Invoice $newInvoice updated in SQLite & Firebase RTDB!',
+                          ),
+                          style: GoogleFonts.poppins(),
+                        ),
+                        backgroundColor: AppColors.primary,
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.check_rounded,
+                    color: Colors.white, size: 18),
+                label: Text(
+                  LanguageService.text('Simpan Perubahan', 'Save Changes'),
+                  style: GoogleFonts.poppins(
+                      color: Colors.white, fontWeight: FontWeight.w600),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 
@@ -693,14 +1292,18 @@ class _BillingPageState extends State<BillingPage>
 
           // 3. Floating Cyber Particle Canvas
           if (_isDarkMode)
-            AnimatedBuilder(
-              animation: _particleController,
-              builder: (context, child) {
-                return CustomPaint(
-                  size: MediaQuery.of(context).size,
-                  painter: AppParticlePainter(_particles),
-                );
-              },
+            IgnorePointer(
+              child: RepaintBoundary(
+                child: AnimatedBuilder(
+                  animation: _particleController,
+                  builder: (context, child) {
+                    return CustomPaint(
+                      size: MediaQuery.of(context).size,
+                      painter: AppParticlePainter(_particles),
+                    );
+                  },
+                ),
+              ),
             ),
 
           // 4. Foreground Content
@@ -711,13 +1314,7 @@ class _BillingPageState extends State<BillingPage>
                 _buildStatMetricCards(),
                 _buildTabBar(),
                 Expanded(
-                  child: _isLoading
-                      ? const Center(
-                          child: CircularProgressIndicator(
-                            color: AppColors.primary,
-                          ),
-                        )
-                      : TabBarView(
+                  child: TabBarView(
                           controller: _tabController,
                           children: [
                             _buildAllInvoicesTab(),
@@ -782,6 +1379,45 @@ class _BillingPageState extends State<BillingPage>
                   overflow: TextOverflow.ellipsis,
                 ),
               ],
+            ),
+          ),
+          InkWell(
+            onTap: _manualSyncCloud,
+            borderRadius: BorderRadius.circular(10),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: AppColors.primary.withValues(alpha: 0.35),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _isSyncingCloud
+                      ? const SizedBox(
+                          width: 13,
+                          height: 13,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: AppColors.cyan,
+                          ),
+                        )
+                      : const Icon(Icons.cloud_sync_rounded,
+                          color: AppColors.cyan, size: 16),
+                  const SizedBox(width: 4),
+                  Text(
+                    'RTDB',
+                    style: GoogleFonts.poppins(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.cyan,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           IconButton(
@@ -1114,6 +1750,12 @@ class _BillingPageState extends State<BillingPage>
             HapticFeedback.lightImpact();
             _showInvoiceReceiptModal(item);
           },
+          onLongPress: _isAdmin
+              ? () {
+                  HapticFeedback.heavyImpact();
+                  _showDeleteInvoiceConfirmation(item);
+                }
+              : null,
           borderRadius: BorderRadius.circular(18),
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -1124,37 +1766,86 @@ class _BillingPageState extends State<BillingPage>
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(7),
+                            decoration: BoxDecoration(
+                              color: isLunas
+                                  ? AppColors.success.withValues(alpha: 0.12)
+                                  : AppColors.primary.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Icon(
+                              isLunas
+                                  ? Icons.receipt_rounded
+                                  : Icons.schedule_rounded,
+                              color: isLunas
+                                  ? AppColors.success
+                                  : AppColors.primary,
+                              size: 16,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              invoiceNo,
+                              style: GoogleFonts.poppins(
+                                color: _textPrimary,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13.5,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Container(
-                          padding: const EdgeInsets.all(7),
-                          decoration: BoxDecoration(
-                            color: isLunas
-                                ? AppColors.success.withValues(alpha: 0.12)
-                                : AppColors.primary.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(10),
+                        _buildStatusBadge(status, isCompact: true),
+                        if (_isAdmin) ...[
+                          const SizedBox(width: 6),
+                          InkWell(
+                            onTap: () => _showEditInvoiceDialog(item),
+                            borderRadius: BorderRadius.circular(8),
+                            child: Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: AppColors.primary.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Icon(
+                                Icons.edit_note_rounded,
+                                size: 16,
+                                color: AppColors.primary,
+                              ),
+                            ),
                           ),
-                          child: Icon(
-                            isLunas
-                                ? Icons.receipt_rounded
-                                : Icons.schedule_rounded,
-                            color:
-                                isLunas ? AppColors.success : AppColors.primary,
-                            size: 16,
+                          const SizedBox(width: 4),
+                          InkWell(
+                            onTap: () => _showDeleteInvoiceConfirmation(item),
+                            borderRadius: BorderRadius.circular(8),
+                            child: Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: AppColors.error.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Icon(
+                                Icons.delete_outline_rounded,
+                                size: 16,
+                                color: AppColors.error,
+                              ),
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          invoiceNo,
-                          style: GoogleFonts.poppins(
-                            color: _textPrimary,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 13.5,
-                          ),
-                        ),
+                        ],
                       ],
                     ),
-                    _buildStatusBadge(status, isCompact: true),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -1174,32 +1865,39 @@ class _BillingPageState extends State<BillingPage>
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
-                      children: [
-                        Icon(Icons.payment_rounded,
-                            size: 14, color: _textSecondary),
-                        const SizedBox(width: 6),
-                        Text(
-                          paymentMethod,
-                          style: GoogleFonts.poppins(
-                            color: _textSecondary,
-                            fontSize: 12,
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Icon(Icons.payment_rounded,
+                              size: 14, color: _textSecondary),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              paymentMethod,
+                              style: GoogleFonts.poppins(
+                                color: _textSecondary,
+                                fontSize: 12,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text('•',
-                            style:
-                                TextStyle(color: _textSecondary, fontSize: 12)),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Qty: $qty',
-                          style: GoogleFonts.poppins(
-                            color: _textSecondary,
-                            fontSize: 12,
+                          const SizedBox(width: 8),
+                          Text('•',
+                              style: TextStyle(
+                                  color: _textSecondary, fontSize: 12)),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Qty: $qty',
+                            style: GoogleFonts.poppins(
+                              color: _textSecondary,
+                              fontSize: 12,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
+                    const SizedBox(width: 8),
                     Text(
                       _currencyFormatter.format(totalPrice),
                       style: GoogleFonts.poppins(
@@ -1216,13 +1914,18 @@ class _BillingPageState extends State<BillingPage>
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      formattedDate,
-                      style: GoogleFonts.poppins(
-                        color: _textSecondary,
-                        fontSize: 11,
+                    Expanded(
+                      child: Text(
+                        formattedDate,
+                        style: GoogleFonts.poppins(
+                          color: _textSecondary,
+                          fontSize: 11,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    const SizedBox(width: 8),
                     if (!isLunas)
                       ElevatedButton.icon(
                         onPressed: () => _navigateToPayment(item),
@@ -1343,6 +2046,8 @@ class _BillingPageState extends State<BillingPage>
                         fontWeight: FontWeight.w700,
                         fontSize: 14,
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                     Text(
                       '$category • $specs',
@@ -1356,6 +2061,7 @@ class _BillingPageState extends State<BillingPage>
                   ],
                 ),
               ),
+              const SizedBox(width: 8),
               Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 4),

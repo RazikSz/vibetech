@@ -296,7 +296,7 @@ void main() {
       // 1. Tambah produk baru dengan diskon awal 15%
       final productId = await DatabaseHelper.instance.createProduct({
         'nama': 'VPS Test Discount',
-        'kategori': 'VPS',
+        'kategori': 'VPS_TEST',
         'harga': 100000.0,
         'stok': 10,
         'deskripsi': 'Test description',
@@ -316,10 +316,10 @@ void main() {
       final updatedProduct = updatedProducts.firstWhere((p) => p['id'] == productId);
       expect((updatedProduct['diskon'] as num).toDouble(), 30.0);
 
-      // 4. Terapkan diskon massal 50% untuk kategori 'VPS'
-      await DatabaseHelper.instance.applyCategoryDiscount('VPS', 50.0);
+      // 4. Terapkan diskon massal 50% untuk kategori 'VPS_TEST'
+      await DatabaseHelper.instance.applyCategoryDiscount('VPS_TEST', 50.0);
       final bulkProducts = await DatabaseHelper.instance.getAllProducts();
-      final bulkVPS = bulkProducts.where((p) => (p['kategori'] as String).contains('VPS')).toList();
+      final bulkVPS = bulkProducts.where((p) => (p['kategori'] as String).contains('VPS_TEST')).toList();
       for (final p in bulkVPS) {
         expect((p['diskon'] as num).toDouble(), 50.0);
       }

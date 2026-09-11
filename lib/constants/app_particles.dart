@@ -12,6 +12,7 @@ class AppParticle {
   double speedY;
   double opacity;
   bool isCyan;
+  final Paint paint;
 
   AppParticle({
     required this.x,
@@ -21,7 +22,10 @@ class AppParticle {
     required this.speedY,
     required this.opacity,
     required this.isCyan,
-  });
+  }) : paint = Paint()
+          ..color = (isCyan ? const Color(0xFF00E5FF) : const Color(0xFFE040FB))
+              .withValues(alpha: opacity)
+          ..style = PaintingStyle.fill;
 
   /// Factory helper to generate initial particle batch
   static List<AppParticle> generateList(math.Random random, {int count = 20}) {
@@ -55,7 +59,7 @@ class AppParticle {
   }
 }
 
-/// CustomPainter to render floating neon particles
+/// CustomPainter to render floating neon particles with zero per-frame allocation
 class AppParticlePainter extends CustomPainter {
   final List<AppParticle> particles;
 
@@ -64,21 +68,69 @@ class AppParticlePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     for (final p in particles) {
-      final paint = Paint()
-        ..color = (p.isCyan ? const Color(0xFF00E5FF) : const Color(0xFFE040FB))
-            .withValues(alpha: p.opacity)
-        ..style = PaintingStyle.fill;
-
       canvas.drawCircle(
         Offset(p.x * size.width, p.y * size.height),
         p.radius,
-        paint,
+        p.paint,
       );
     }
   }
 
   @override
   bool shouldRepaint(covariant AppParticlePainter oldDelegate) => true;
+}
+
+/// Ultra-smooth, GPU-isolated animated floating cyber particles layer.
+/// Uses RepaintBoundary so animating particles never force parent widgets to repaint.
+class CyberParticlesLayer extends StatefulWidget {
+  final int count;
+  const CyberParticlesLayer({super.key, this.count = 20});
+
+  @override
+  State<CyberParticlesLayer> createState() => _CyberParticlesLayerState();
+}
+
+class _CyberParticlesLayerState extends State<CyberParticlesLayer>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final List<AppParticle> _particles;
+  final math.Random _random = math.Random();
+
+  @override
+  void initState() {
+    super.initState();
+    _particles = AppParticle.generateList(_random, count: widget.count);
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 10),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: RepaintBoundary(
+          child: AnimatedBuilder(
+            animation: _controller,
+            builder: (context, _) {
+              AppParticle.updatePositions(_particles);
+              return CustomPaint(
+                painter: AppParticlePainter(_particles),
+                size: Size.infinite,
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Ambient Neon Glow Orbs for Dark Mode pages

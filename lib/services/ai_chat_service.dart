@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../constants/app_constants.dart';
 import '../database/db_helper.dart';
+import '../utils/security_helper.dart';
 
 /// ============================================================================
 /// FURINA AI CHAT SERVICE - VIBETECH XYZ (GOOGLE GEMINI AI INTEGRATION)
@@ -25,9 +26,10 @@ class AiChatService {
   /// Sutradara & Developer AI
   static const String director = AppConstants.developerName;
 
-  /// Google Gemini API Key Resmi
-  static const String geminiApiKey =
-      'AQ.Ab8RN6JoGnIKwXcGp0yPQyHSIfnRGf1pDoPM0LqBVK7lbJWtgQ';
+  /// Google Gemini API Key Resmi (Terlindungi Obfuskasi Dinamis)
+  static final String geminiApiKey = SecurityHelper.deobfuscate(
+      'Gwt0GzhiCBRsEDUdNBMRLQI5HSpqIwoLIxIJEzw0CB08ayoeNQoXahYrGAwRbTY4EA0uPQs=');
+
 
   /// Model Gemini yang digunakan
   static const String primaryModel = 'gemini-3.6-flash';

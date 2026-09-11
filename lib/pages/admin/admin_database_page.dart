@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -11,7 +12,11 @@ import 'package:vibetech_xyz/services/balance_service.dart';
 import 'package:vibetech_xyz/services/cloud_sync_service.dart';
 import 'package:vibetech_xyz/services/firebase_transaction_service.dart';
 import 'package:vibetech_xyz/services/firebase_user_service.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:vibetech_xyz/services/firebase_email_service.dart';
+import 'package:vibetech_xyz/services/notification_service.dart';
 import 'package:vibetech_xyz/services/language_service.dart';
+import 'package:vibetech_xyz/utils/security_helper.dart';
 
 /// ============================================================================
 /// HALAMAN PORTAL ADMINISTRATOR: MANAJEMEN DATABASE PENGGUNA & ADMIN
@@ -40,7 +45,6 @@ class AdminDatabasePage extends StatefulWidget {
 class _AdminDatabasePageState extends State<AdminDatabasePage>
     with TickerProviderStateMixin {
   late bool _isDarkMode;
-  bool _isLoading = true;
   List<Map<String, dynamic>> _allUsers = [];
   List<Map<String, dynamic>> _filteredUsers = [];
 
@@ -69,6 +73,13 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
   late AnimationController _particleController;
   final List<AppParticle> _particles = [];
   final math.Random _random = math.Random();
+  Timer? _liveSyncTimer;
+  VoidCallback? _usersRealtimeListener;
+  VoidCallback? _txRealtimeListener;
+
+  // Status Konfigurasi SMTP Email Administrator
+  String? _smtpUser;
+  bool _isSmtpActive = false;
 
   @override
   void initState() {
@@ -94,10 +105,51 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
     _searchController.addListener(_applyFilter);
     _searchTxController.addListener(_applyTxFilter);
     _loadAllAdminData();
+
+    // Hubungkan listener streaming real-time Firebase RTDB untuk pengguna & transaksi
+    _usersRealtimeListener = () async {
+      try {
+        final freshUsers = await DatabaseHelper.instance.getAllUsers();
+        if (mounted && freshUsers.isNotEmpty) {
+          setState(() {
+            _allUsers = List<Map<String, dynamic>>.from(
+              freshUsers.map((u) => Map<String, dynamic>.from(u)),
+            );
+          });
+          _applyFilter();
+        }
+      } catch (_) {}
+    };
+
+    _txRealtimeListener = () async {
+      try {
+        final freshTx = await DatabaseHelper.instance.getAllTransactions();
+        if (mounted) {
+          setState(() {
+            _allTransactions = freshTx;
+          });
+          _applyTxFilter();
+        }
+      } catch (_) {}
+    };
+
+    CloudSyncService.instance.usersNotifier
+        .addListener(_usersRealtimeListener!);
+    CloudSyncService.instance.transactionsNotifier
+        .addListener(_txRealtimeListener!);
   }
 
   @override
   void dispose() {
+    if (_usersRealtimeListener != null) {
+      CloudSyncService.instance.usersNotifier
+          .removeListener(_usersRealtimeListener!);
+    }
+    if (_txRealtimeListener != null) {
+      CloudSyncService.instance.transactionsNotifier
+          .removeListener(_txRealtimeListener!);
+    }
+    _liveSyncTimer?.cancel();
     _searchController.dispose();
     _searchFocusNode.dispose();
     _searchTxController.dispose();
@@ -124,6 +176,35 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
 
   Future<void> _loadAllAdminData() async {
     try {
+      // 0. Verifikasi Otorisasi Hak Akses Administrator Secara Ketat
+      final currentAdmin = await DatabaseHelper.instance.getUserByEmailOrUsername(
+        widget.currentAdminEmail.isNotEmpty ? widget.currentAdminEmail : widget.currentAdminUsername,
+      );
+      final role = (currentAdmin?['role'] ?? '').toString().toLowerCase();
+      final username = (currentAdmin?['username'] ?? widget.currentAdminUsername).toString().toLowerCase();
+      final email = (currentAdmin?['email'] ?? widget.currentAdminEmail).toString().toLowerCase();
+      final isAuthorized = role == 'admin' ||
+          role == 'administrator' ||
+          username == 'admin' ||
+          username == 'raziek' ||
+          email == 'admin@vibetech.com';
+
+      if (!isAuthorized) {
+        if (mounted) {
+          Navigator.of(context).pop();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(LanguageService.text(
+                'Akses Ditolak! Anda bukan administrator.',
+                'Access Denied! You are not an administrator.',
+              )),
+              backgroundColor: const Color(0xFFEF4444),
+            ),
+          );
+        }
+        return;
+      }
+
       // 1. Muat data pengguna & transaksi dari SQLite lokal secara INSTAN (0ms delay)
       final users = await DatabaseHelper.instance.getAllUsers();
       final localTx = await DatabaseHelper.instance.getAllTransactions();
@@ -136,94 +217,88 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
           _allTransactions = List<Map<String, dynamic>>.from(
             localTx.map((t) => Map<String, dynamic>.from(t)),
           );
-          _isLoading = false; // Langsung tampilkan antarmuka tanpa muter-muter
         });
         _applyFilter();
         _applyTxFilter();
         _mainAnimController.forward(from: 0.0);
       }
 
-      // 2. Muat pembaruan Firebase Realtime Database di latar belakang
+      // 2. Muat status konfigurasi SMTP Email
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final emailSettings = await DatabaseHelper.instance.getEmailSettings(
+              userEmail: widget.currentAdminEmail,
+            ) ??
+            await DatabaseHelper.instance.getEmailSettings();
+
+        String? u = emailSettings?['smtp_user']?.toString().trim();
+        if (u == null || u.isEmpty) {
+          u = prefs.getString('smtp_user')?.trim();
+        }
+
+        String? p = emailSettings?['smtp_pass']?.toString().trim();
+        if (p == null || p.isEmpty) {
+          p = prefs.getString('smtp_pass')?.trim();
+        }
+
+        final bool hasCreds = (u != null && u.isNotEmpty && p != null && p.isNotEmpty);
+        final bool isActive = prefs.getBool('smtp_is_active') ?? hasCreds;
+
+        if (mounted) {
+          setState(() {
+            _smtpUser = u;
+            _isSmtpActive = hasCreds || isActive;
+          });
+        }
+      } catch (_) {}
+
+      // 3. Muat pembaruan Firebase Realtime Database di latar belakang
       _fetchCloudUsersInBackground(users);
       _fetchCloudTransactionsInBackground(localTx);
+
+      // 3. Pasang fallback live auto-sync berkala (sebagai cadangan terhadap streaming event)
+      _liveSyncTimer?.cancel();
+      _liveSyncTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+        if (mounted && !_isSyncingCloud) {
+          _fetchCloudUsersInBackground(_allUsers);
+          _fetchCloudTransactionsInBackground(_allTransactions);
+        }
+      });
     } catch (e) {
       debugPrint('Error loading admin data: $e');
-      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  void _fetchCloudUsersInBackground(List<Map<String, dynamic>> localUsers) async {
+  void _fetchCloudUsersInBackground(
+      List<Map<String, dynamic>> localUsers) async {
     try {
-      await CloudSyncService.instance.syncAllFromCloud();
+      await FirebaseUserService.instance.syncUsersFromFirebase();
 
       final refreshedUsers = await DatabaseHelper.instance.getAllUsers();
-      final refreshedTx = await DatabaseHelper.instance.getAllTransactions();
-      if (mounted) {
+      if (mounted && refreshedUsers.isNotEmpty) {
         setState(() {
-          if (refreshedUsers.isNotEmpty) {
-            _allUsers = List<Map<String, dynamic>>.from(
-              refreshedUsers.map((u) => Map<String, dynamic>.from(u)),
-            );
-          }
-          if (refreshedTx.isNotEmpty) {
-            _allTransactions = List<Map<String, dynamic>>.from(
-              refreshedTx.map((t) => Map<String, dynamic>.from(t)),
-            );
-          }
+          _allUsers = List<Map<String, dynamic>>.from(
+            refreshedUsers.map((u) => Map<String, dynamic>.from(u)),
+          );
         });
         _applyFilter();
-        _applyTxFilter();
       }
     } catch (e) {
-      debugPrint('[AdminDatabasePage] Background cloud fetch info: $e');
+      debugPrint('[AdminDatabasePage] Background cloud fetch users info: $e');
     }
   }
 
   void _fetchCloudTransactionsInBackground(
       List<Map<String, dynamic>> localTx) async {
     try {
-      final cloudTx = await FirebaseTransactionService.instance
-          .getAllTransactionsFromFirebase()
-          .timeout(const Duration(seconds: 2), onTimeout: () => []);
+      await FirebaseTransactionService.instance.syncTransactionsFromFirebase();
+      final freshTx = await DatabaseHelper.instance.getAllTransactions();
+      if (!mounted) return;
 
-      if (cloudTx.isEmpty || !mounted) return;
-
-      final Map<String, Map<String, dynamic>> mergedMap = {};
-      for (final tx in localTx) {
-        final key = (tx['invoice_no'] ?? 'loc_${tx['id']}').toString();
-        mergedMap[key] = Map<String, dynamic>.from(tx);
-      }
-
-      for (final tx in cloudTx) {
-        final key = (tx['invoice_no'] ??
-                tx['id_ref'] ??
-                'cloud_${DateTime.now().millisecondsSinceEpoch}')
-            .toString();
-        if (!mergedMap.containsKey(key)) {
-          mergedMap[key] = Map<String, dynamic>.from(tx);
-        } else {
-          final currentStatus =
-              mergedMap[key]!['status']?.toString().toLowerCase();
-          final cloudStatus = tx['status']?.toString().toLowerCase();
-          if (cloudStatus == 'selesai' && currentStatus != 'selesai') {
-            mergedMap[key]!['status'] = tx['status'];
-          }
-        }
-      }
-
-      final combined = mergedMap.values.toList();
-      combined.sort((a, b) {
-        final dateA = (a['tanggal'] ?? a['created_at'] ?? '').toString();
-        final dateB = (b['tanggal'] ?? b['created_at'] ?? '').toString();
-        return dateB.compareTo(dateA);
+      setState(() {
+        _allTransactions = freshTx;
       });
-
-      if (mounted) {
-        setState(() {
-          _allTransactions = combined;
-        });
-        _applyTxFilter();
-      }
+      _applyTxFilter();
     } catch (e) {
       debugPrint('Background cloud fetch info: $e');
     }
@@ -265,6 +340,11 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
     );
 
     try {
+      // 1. Sinkronisasi Pengguna secara langsung ke Firebase RTDB (https://vibetech-xyz-default-rtdb.asia-southeast1.firebasedatabase.app/users)
+      await FirebaseUserService.instance.syncUsersFromFirebase();
+      await FirebaseUserService.instance.syncAllLocalUsersToFirebase();
+
+      // 2. Sinkronisasi penuh semua domain ke/dari Cloud
       await CloudSyncService.instance.syncAllFromCloud();
       await CloudSyncService.instance.syncAllToCloud();
 
@@ -348,6 +428,26 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
             uid.contains(query);
       }).toList();
     }
+
+    // 3. Urutkan: Administrator paling atas, kemudian urut nomor/nama alfabetis
+    list.sort((a, b) {
+      final roleA = (a['role'] ?? 'user').toString().toLowerCase();
+      final roleB = (b['role'] ?? 'user').toString().toLowerCase();
+      final isAdminA = roleA == 'admin' || roleA == 'administrator';
+      final isAdminB = roleB == 'admin' || roleB == 'administrator';
+      if (isAdminA && !isAdminB) return -1;
+      if (!isAdminA && isAdminB) return 1;
+
+      final orderA =
+          (a['no'] ?? a['urutan'] ?? a['id'] as num?)?.toInt() ?? 999;
+      final orderB =
+          (b['no'] ?? b['urutan'] ?? b['id'] as num?)?.toInt() ?? 999;
+      if (orderA != orderB) return orderA.compareTo(orderB);
+
+      final nameA = (a['nama'] ?? a['username'] ?? '').toString().toLowerCase();
+      final nameB = (b['nama'] ?? b['username'] ?? '').toString().toLowerCase();
+      return nameA.compareTo(nameB);
+    });
 
     setState(() {
       _filteredUsers = list;
@@ -494,12 +594,7 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
               children: [
                 _buildAppBar(),
                 Expanded(
-                  child: _isLoading
-                      ? const Center(
-                          child: CircularProgressIndicator(
-                              color: Color(0xFF00E5FF)),
-                        )
-                      : RefreshIndicator(
+                  child: RefreshIndicator(
                           onRefresh: _loadAllAdminData,
                           color: const Color(0xFF00E5FF),
                           backgroundColor: _cardColor,
@@ -635,6 +730,11 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              _buildIconButton(
+                icon: Icons.mark_email_read_outlined,
+                onTap: _showSmtpConfigDialog,
+              ),
+              const SizedBox(width: 6),
               _buildIconButton(
                 icon: Icons.cloud_sync_rounded,
                 onTap: _syncUsersToFirebase,
@@ -806,6 +906,160 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
                           color: Colors.white,
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // 0.1 Banner Status & Manajemen SMTP Email Server
+        Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: _cardColor,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: (_isSmtpActive
+                      ? const Color(0xFF00E676)
+                      : const Color(0xFFFFB300))
+                  .withValues(alpha: 0.35),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: (_isSmtpActive
+                        ? const Color(0xFF00E676)
+                        : const Color(0xFFFFB300))
+                    .withValues(alpha: 0.1),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: _isSmtpActive
+                        ? const [Color(0xFF00E676), Color(0xFF00B0FF)]
+                        : const [Color(0xFFFFB300), Color(0xFFFF9100)],
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  _isSmtpActive
+                      ? Icons.mark_email_read_rounded
+                      : Icons.mail_lock_rounded,
+                  color: Colors.white,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            LanguageService.text(
+                                'Konfigurasi Email SMTP', 'SMTP Email Server'),
+                            style: GoogleFonts.poppins(
+                              color: _textPrimary,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: (_isSmtpActive
+                                    ? const Color(0xFF00E676)
+                                    : const Color(0xFFFFB300))
+                                .withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                              color: (_isSmtpActive
+                                      ? const Color(0xFF00E676)
+                                      : const Color(0xFFFFB300))
+                                  .withValues(alpha: 0.5),
+                            ),
+                          ),
+                          child: Text(
+                            _isSmtpActive ? 'AKTIF' : 'BELUM AKTIF',
+                            style: GoogleFonts.spaceMono(
+                              color: _isSmtpActive
+                                  ? const Color(0xFF00E676)
+                                  : const Color(0xFFFFB300),
+                              fontSize: 8.5,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _isSmtpActive
+                          ? (_smtpUser ?? 'SMTP Server Terhubung')
+                          : LanguageService.text(
+                              'Atur kredensial email agar invoice & notifikasi otomatis terkirim',
+                              'Setup email credentials for auto invoices & notifications',
+                            ),
+                      style: GoogleFonts.poppins(
+                        color: _textSecondary,
+                        fontSize: 11,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              AppBounceTap(
+                onTap: _showSmtpConfigDialog,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF00B0FF), Color(0xFF0091EA)],
+                    ),
+                    borderRadius: BorderRadius.circular(10),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF00B0FF).withValues(alpha: 0.3),
+                        blurRadius: 6,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.settings_rounded,
+                          color: Colors.white, size: 14),
+                      const SizedBox(width: 4),
+                      Text(
+                        LanguageService.text('Kelola', 'Manage'),
+                        style: GoogleFonts.poppins(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
                         ),
                       ),
                     ],
@@ -1342,59 +1596,87 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
                   ),
                 ),
 
-                // Role Badge
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    gradient: isAdmin
-                        ? const LinearGradient(
-                            colors: [Color(0xFF7C4DFF), Color(0xFFE040FB)])
-                        : null,
-                    color: isAdmin
-                        ? null
-                        : (_isDarkMode
-                            ? const Color(0xFF00E5FF).withValues(alpha: 0.12)
-                            : const Color(0xFF00B0FF).withValues(alpha: 0.12)),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: isAdmin
-                          ? Colors.transparent
-                          : (_isDarkMode
-                              ? const Color(0xFF00E5FF).withValues(alpha: 0.3)
-                              : const Color(0xFF00B0FF).withValues(alpha: 0.3)),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        isAdmin
-                            ? Icons.admin_panel_settings_rounded
-                            : Icons.person_rounded,
-                        size: 12,
+                // Role Badge & Nomor Urut
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        gradient: isAdmin
+                            ? const LinearGradient(
+                                colors: [Color(0xFF7C4DFF), Color(0xFFE040FB)])
+                            : null,
                         color: isAdmin
-                            ? Colors.white
+                            ? null
                             : (_isDarkMode
                                 ? const Color(0xFF00E5FF)
-                                : const Color(0xFF0081CB)),
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        isAdmin ? 'ADMIN' : 'MEMBER',
-                        style: GoogleFonts.poppins(
+                                    .withValues(alpha: 0.12)
+                                : const Color(0xFF00B0FF)
+                                    .withValues(alpha: 0.12)),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
                           color: isAdmin
-                              ? Colors.white
+                              ? Colors.transparent
                               : (_isDarkMode
                                   ? const Color(0xFF00E5FF)
-                                  : const Color(0xFF0081CB)),
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.5,
+                                      .withValues(alpha: 0.3)
+                                  : const Color(0xFF00B0FF)
+                                      .withValues(alpha: 0.3)),
                         ),
                       ),
-                    ],
-                  ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            isAdmin
+                                ? Icons.admin_panel_settings_rounded
+                                : Icons.person_rounded,
+                            size: 12,
+                            color: isAdmin
+                                ? Colors.white
+                                : (_isDarkMode
+                                    ? const Color(0xFF00E5FF)
+                                    : const Color(0xFF0081CB)),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            isAdmin ? 'ADMIN' : 'MEMBER',
+                            style: GoogleFonts.poppins(
+                              color: isAdmin
+                                  ? Colors.white
+                                  : (_isDarkMode
+                                      ? const Color(0xFF00E5FF)
+                                      : const Color(0xFF0081CB)),
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: _isDarkMode
+                            ? Colors.white.withValues(alpha: 0.06)
+                            : Colors.black.withValues(alpha: 0.05),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        '#${index + 1}',
+                        style: GoogleFonts.spaceMono(
+                          color: _textSecondary,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -1437,7 +1719,9 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
                             ),
                             Expanded(
                               child: Text(
-                                showPassword ? password : '••••••••',
+                                showPassword
+                                    ? password
+                                    : '••••••••',
                                 style: GoogleFonts.spaceMono(
                                   color: _textPrimary,
                                   fontSize: 12,
@@ -1490,7 +1774,11 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
                             ),
                             Expanded(
                               child: Text(
-                                showPin ? pin : '••••••',
+                                showPin
+                                    ? (pin.startsWith('vbt\$pin\$')
+                                        ? '🔒 [Terenkripsi]'
+                                        : pin)
+                                    : '••••••',
                                 style: GoogleFonts.spaceMono(
                                   color: _textPrimary,
                                   fontSize: 12,
@@ -2399,53 +2687,64 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: _isDarkMode
-                            ? Colors.black.withValues(alpha: 0.4)
-                            : Colors.white,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: _cardBorder),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.receipt_rounded,
-                            size: 13,
+                Flexible(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
                             color: _isDarkMode
-                                ? const Color(0xFF00E5FF)
-                                : const Color(0xFF7C4DFF),
+                                ? Colors.black.withValues(alpha: 0.4)
+                                : Colors.white,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: _cardBorder),
                           ),
-                          const SizedBox(width: 5),
-                          Text(
-                            invoiceNo,
-                            style: GoogleFonts.spaceMono(
-                              color: _textPrimary,
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                            ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.receipt_rounded,
+                                size: 13,
+                                color: _isDarkMode
+                                    ? const Color(0xFF00E5FF)
+                                    : const Color(0xFF7C4DFF),
+                              ),
+                              const SizedBox(width: 5),
+                              Flexible(
+                                child: Text(
+                                  invoiceNo,
+                                  style: GoogleFonts.spaceMono(
+                                    color: _textPrimary,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 6),
-                    InkWell(
-                      onTap: () {
-                        Clipboard.setData(ClipboardData(text: invoiceNo));
-                        _showSnackBar('Invoice $invoiceNo disalin!');
-                      },
-                      child: Padding(
-                        padding: const EdgeInsets.all(4.0),
-                        child: Icon(Icons.copy_rounded,
-                            size: 14, color: _textSecondary),
+                      const SizedBox(width: 6),
+                      InkWell(
+                        onTap: () {
+                          Clipboard.setData(ClipboardData(text: invoiceNo));
+                          _showSnackBar('Invoice $invoiceNo disalin!');
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.all(4.0),
+                          child: Icon(Icons.copy_rounded,
+                              size: 14, color: _textSecondary),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
+                const SizedBox(width: 8),
                 Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 9, vertical: 3.5),
@@ -2518,6 +2817,7 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    const SizedBox(width: 8),
                     Icon(Icons.calendar_today_outlined,
                         size: 12, color: _textSecondary),
                     const SizedBox(width: 4),
@@ -2545,37 +2845,84 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
                   const BorderRadius.vertical(bottom: Radius.circular(18)),
             ),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF7C4DFF).withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        paymentMethod.toUpperCase(),
-                        style: GoogleFonts.poppins(
-                          color: const Color(0xFF7C4DFF),
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
+                Expanded(
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color:
+                                const Color(0xFF7C4DFF).withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            paymentMethod.toUpperCase(),
+                            style: GoogleFonts.poppins(
+                              color: const Color(0xFF7C4DFF),
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      'Rp ${currencyFormatter.format(totalHarga.toInt()).replaceAll(',', '.')}',
-                      style: GoogleFonts.poppins(
-                        color: const Color(0xFF00E676),
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w800,
+                      const SizedBox(width: 8),
+                      Text(
+                        'Rp ${currencyFormatter.format(totalHarga.toInt()).replaceAll(',', '.')}',
+                        style: GoogleFonts.poppins(
+                          color: const Color(0xFF00E676),
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                AppBounceTap(
+                  onTap: () => _showEditTransactionDialog(tx),
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: AppColors.primary.withValues(alpha: 0.4),
                       ),
                     ),
-                  ],
+                    child: const Icon(
+                      Icons.edit_outlined,
+                      size: 14,
+                      color: AppColors.primary,
+                    ),
+                  ),
                 ),
+                const SizedBox(width: 6),
+                AppBounceTap(
+                  onTap: () => _showDeleteTransactionDialog(tx),
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: AppColors.error.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: AppColors.error.withValues(alpha: 0.4),
+                      ),
+                    ),
+                    child: const Icon(
+                      Icons.delete_outline_rounded,
+                      size: 14,
+                      color: AppColors.error,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
                 AppBounceTap(
                   onTap: () => _showTransactionDetailModal(tx),
                   child: Container(
@@ -2619,6 +2966,306 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
                 ),
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showEditTransactionDialog(Map<String, dynamic> tx) {
+    final formKey = GlobalKey<FormState>();
+    final int txId = (tx['id'] as num?)?.toInt() ?? 0;
+    final String oldInvoice =
+        (tx['invoice_no'] ?? tx['id_ref'] ?? '').toString();
+
+    final nameCtrl =
+        TextEditingController(text: tx['nama_produk']?.toString() ?? '');
+    final priceCtrl = TextEditingController(
+        text: (tx['total_harga'] as num?)?.toInt().toString() ?? '0');
+    final qtyCtrl = TextEditingController(
+        text: (tx['jumlah'] as num?)?.toInt().toString() ?? '1');
+    final emailCtrl =
+        TextEditingController(text: tx['user_email']?.toString() ?? '');
+    final invoiceCtrl = TextEditingController(
+        text: oldInvoice.isNotEmpty
+            ? oldInvoice
+            : 'INV-${DateTime.now().millisecondsSinceEpoch}');
+    final notesCtrl =
+        TextEditingController(text: tx['notes']?.toString() ?? '');
+    String selectedStatus = tx['status']?.toString() ?? 'Selesai';
+    String paymentMethod =
+        tx['payment_method']?.toString() ?? 'Saldo VibeWallet';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (dContext, setDialogState) => AlertDialog(
+          backgroundColor: _cardColor,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Text(
+            LanguageService.text(
+                'Edit Transaksi Pesanan', 'Edit Order Transaction'),
+            style: GoogleFonts.poppins(
+                fontWeight: FontWeight.bold, color: _textPrimary, fontSize: 16),
+          ),
+          content: SingleChildScrollView(
+            child: Form(
+              key: formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextFormField(
+                    controller: emailCtrl,
+                    style:
+                        GoogleFonts.poppins(color: _textPrimary, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText:
+                          LanguageService.text('Email Member', 'Member Email'),
+                      labelStyle: GoogleFonts.poppins(
+                          color: _textSecondary, fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: nameCtrl,
+                    style:
+                        GoogleFonts.poppins(color: _textPrimary, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: LanguageService.text(
+                          'Nama Layanan / Produk', 'Product Name'),
+                      labelStyle: GoogleFonts.poppins(
+                          color: _textSecondary, fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: priceCtrl,
+                          keyboardType: TextInputType.number,
+                          style: GoogleFonts.poppins(
+                              color: _textPrimary, fontSize: 13),
+                          decoration: InputDecoration(
+                            labelText: LanguageService.text(
+                                'Total Harga (Rp)', 'Total Price'),
+                            labelStyle: GoogleFonts.poppins(
+                                color: _textSecondary, fontSize: 12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextFormField(
+                          controller: qtyCtrl,
+                          keyboardType: TextInputType.number,
+                          style: GoogleFonts.poppins(
+                              color: _textPrimary, fontSize: 13),
+                          decoration: InputDecoration(
+                            labelText: LanguageService.text('Qty', 'Qty'),
+                            labelStyle: GoogleFonts.poppins(
+                                color: _textSecondary, fontSize: 12),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: invoiceCtrl,
+                    style:
+                        GoogleFonts.poppins(color: _textPrimary, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText:
+                          LanguageService.text('No. Invoice', 'Invoice No.'),
+                      labelStyle: GoogleFonts.poppins(
+                          color: _textSecondary, fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<String>(
+                    initialValue: [
+                      'Selesai',
+                      'Pending',
+                      'Diproses',
+                      'Dibatalkan'
+                    ].contains(selectedStatus)
+                        ? selectedStatus
+                        : 'Selesai',
+                    dropdownColor: _cardColor,
+                    style:
+                        GoogleFonts.poppins(color: _textPrimary, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: LanguageService.text('Status', 'Status'),
+                      labelStyle: GoogleFonts.poppins(
+                          color: _textSecondary, fontSize: 12),
+                    ),
+                    items: ['Selesai', 'Pending', 'Diproses', 'Dibatalkan']
+                        .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                        .toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setDialogState(() => selectedStatus = val);
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(LanguageService.tr('batal'),
+                  style: GoogleFonts.poppins(color: _textSecondary)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: () async {
+                Navigator.pop(ctx);
+                final newInvoice = invoiceCtrl.text.trim();
+                final updatedData = {
+                  'id': txId > 0 ? txId : null,
+                  'user_email': emailCtrl.text.trim(),
+                  'nama_produk': nameCtrl.text.trim(),
+                  'jumlah': int.tryParse(qtyCtrl.text.trim()) ?? 1,
+                  'total_harga': double.tryParse(priceCtrl.text.trim()) ?? 0.0,
+                  'status': selectedStatus,
+                  'invoice_no': newInvoice,
+                  'notes': notesCtrl.text.trim(),
+                  'tanggal': tx['tanggal'] ?? DateTime.now().toIso8601String(),
+                  'payment_method': paymentMethod,
+                };
+
+                // 1. Optimistic UI update
+                setState(() {
+                  final idx = _allTransactions.indexWhere((t) =>
+                      (txId > 0 && t['id'] == txId) ||
+                      (oldInvoice.isNotEmpty &&
+                          (t['invoice_no'] == oldInvoice ||
+                              t['id_ref'] == oldInvoice)));
+                  if (idx != -1) {
+                    _allTransactions[idx] = {
+                      ..._allTransactions[idx],
+                      ...updatedData
+                    };
+                  }
+                });
+                _applyTxFilter();
+
+                _showSnackBar(
+                    'Transaksi $newInvoice berhasil diperbarui di SQLite & Firebase!');
+
+                // 2. Simpan di DB lokal & Firebase RTDB
+                try {
+                  final db = await DatabaseHelper.instance.database;
+                  if (txId > 0) {
+                    await DatabaseHelper.instance
+                        .updateTransaction(txId, updatedData);
+                  } else if (oldInvoice.isNotEmpty) {
+                    await db.update('transactions', updatedData,
+                        where: 'invoice_no = ?', whereArgs: [oldInvoice]);
+                  }
+                  await FirebaseTransactionService.instance
+                      .updateTransactionInFirebase(
+                    invoiceNo: oldInvoice.isNotEmpty ? oldInvoice : newInvoice,
+                    localId: txId > 0 ? txId : null,
+                    namaProduk: nameCtrl.text.trim(),
+                    userEmail: emailCtrl.text.trim(),
+                    updatedData: updatedData,
+                  );
+                } catch (e) {
+                  debugPrint('Error editing transaction: $e');
+                }
+              },
+              child: Text(LanguageService.tr('simpan'),
+                  style: GoogleFonts.poppins(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showDeleteTransactionDialog(Map<String, dynamic> tx) {
+    final int txId = (tx['id'] as num?)?.toInt() ?? 0;
+    final String invoiceNo =
+        (tx['invoice_no'] ?? tx['id_ref'] ?? '').toString();
+    final String productName = tx['nama_produk']?.toString() ?? 'Layanan';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _cardColor,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          LanguageService.text('Hapus Transaksi', 'Delete Transaction'),
+          style: GoogleFonts.poppins(
+              fontWeight: FontWeight.bold, color: _textPrimary),
+        ),
+        content: Text(
+          LanguageService.text(
+            'Apakah Anda yakin ingin menghapus transaksi $invoiceNo ($productName)?',
+            'Are you sure you want to delete transaction $invoiceNo ($productName)?',
+          ),
+          style: GoogleFonts.poppins(color: _textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(LanguageService.tr('batal'),
+                style: GoogleFonts.poppins(color: _textSecondary)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.error,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () async {
+              Navigator.pop(ctx);
+
+              // 1. Optimistic UI update
+              setState(() {
+                _allTransactions.removeWhere((t) =>
+                    (txId > 0 && t['id'] == txId) ||
+                    (invoiceNo.isNotEmpty &&
+                        (t['invoice_no'] == invoiceNo ||
+                            t['id_ref'] == invoiceNo)));
+              });
+              _applyTxFilter();
+
+              _showSnackBar('Transaksi $invoiceNo berhasil dihapus!');
+
+              // 2. Hapus dari SQLite & Firebase RTDB
+              try {
+                if (txId > 0) {
+                  await DatabaseHelper.instance
+                      .deleteTransaction(txId, invoiceNo: invoiceNo);
+                } else if (invoiceNo.isNotEmpty) {
+                  await DatabaseHelper.instance
+                      .deleteTransactionByInvoice(invoiceNo);
+                }
+                await FirebaseTransactionService.instance
+                    .deleteTransactionFromFirebase(
+                  invoiceNo: invoiceNo.isNotEmpty ? invoiceNo : null,
+                  localId: txId > 0 ? txId : null,
+                  namaProduk: productName,
+                  userEmail: tx['user_email']?.toString(),
+                );
+              } catch (e) {
+                debugPrint('Error deleting transaction: $e');
+              }
+            },
+            child: Text(LanguageService.tr('hapus'),
+                style: GoogleFonts.poppins(
+                    color: Colors.white, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -2725,26 +3372,56 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
                 ),
               ),
               const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.check_rounded, color: Colors.white),
-                  label: Text(
-                    LanguageService.tr('tutup'),
-                    style: GoogleFonts.poppins(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _showEditTransactionDialog(tx);
+                      },
+                      icon: const Icon(Icons.edit_rounded,
+                          color: Colors.white, size: 16),
+                      label: Text(
+                        LanguageService.text('Edit', 'Edit'),
+                        style: GoogleFonts.poppins(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
                     ),
                   ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF7C4DFF),
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _showDeleteTransactionDialog(tx);
+                      },
+                      icon: const Icon(Icons.delete_outline_rounded,
+                          color: Colors.white, size: 16),
+                      label: Text(
+                        LanguageService.text('Hapus', 'Delete'),
+                        style: GoogleFonts.poppins(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.error,
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
                     ),
                   ),
-                ),
+                ],
               ),
             ],
           ),
@@ -2796,12 +3473,17 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
   // ===========================================================================
   void _showEditUserModal(Map<String, dynamic> user) {
     final int id = user['id'] as int;
+    final String existingPass = user['password']?.toString() ?? '';
+    final String existingPin = user['pin']?.toString() ?? '123456';
+    final bool isHashedPass = existingPass.startsWith('vbt\$sha256\$');
+    final bool isHashedPin = existingPin.startsWith('vbt\$pin\$');
+
     final TextEditingController usernameCtrl =
         TextEditingController(text: user['username'] ?? '');
     final TextEditingController passwordCtrl =
-        TextEditingController(text: user['password'] ?? '');
+        TextEditingController(text: isHashedPass ? '' : existingPass);
     final TextEditingController pinCtrl =
-        TextEditingController(text: user['pin'] ?? '123456');
+        TextEditingController(text: isHashedPin ? '' : existingPin);
     final TextEditingController namaCtrl =
         TextEditingController(text: user['nama'] ?? '');
     final TextEditingController emailCtrl =
@@ -3120,8 +3802,10 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
                       child: ElevatedButton(
                         onPressed: () async {
                           final newUsername = usernameCtrl.text.trim();
-                          final newPass = passwordCtrl.text.trim();
-                          final newPin = pinCtrl.text.trim();
+                          final typedPass = passwordCtrl.text.trim();
+                          final typedPin = pinCtrl.text.trim();
+                          final newPass = typedPass.isNotEmpty ? typedPass : existingPass;
+                          final newPin = typedPin.isNotEmpty ? typedPin : existingPin;
                           final newNama = namaCtrl.text.trim();
                           final newEmail = emailCtrl.text.trim();
                           final newPhone = phoneCtrl.text.trim();
@@ -3141,11 +3825,13 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
                             return;
                           }
 
-                          if (newPin.length < 6) {
+                          if (typedPin.isNotEmpty &&
+                              (typedPin.length != 6 ||
+                                  int.tryParse(typedPin) == null)) {
                             _showSnackBar(
                               LanguageService.text(
-                                'PIN Transaksi harus terdiri dari 6 angka!',
-                                'Transaction PIN must be 6 digits!',
+                                'PIN Transaksi harus berupa 6 digit angka!',
+                                'Transaction PIN must be 6 numeric digits!',
                               ),
                               isError: true,
                             );
@@ -3168,6 +3854,21 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
 
                           await DatabaseHelper.instance
                               .updateUserFull(id, updateData);
+
+                          // Sinkronkan ke Firebase RTDB & Firestore di latar belakang (Non-blocking)
+                          FirebaseUserService.instance
+                              .updateUserInFirebase(
+                            uid: user['uid']?.toString(),
+                            email: newEmail,
+                            username: newUsername,
+                            docId: user['doc_id']?.toString(),
+                            updatedData: updateData,
+                          )
+                              .catchError((e) {
+                            debugPrint(
+                                '[AdminDatabasePage] Background update user error: $e');
+                            return false;
+                          });
 
                           // Sinkronisasi session SharedPreferences jika admin mengedit dirinya sendiri
                           final bool isEditingSelf = (user['username']
@@ -3525,8 +4226,8 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
                             'uid':
                                 'usr_${DateTime.now().millisecondsSinceEpoch}',
                             'username': u,
-                            'password': p,
-                            'pin': pin,
+                            'password': SecurityHelper.hashPassword(p),
+                            'pin': SecurityHelper.hashPin(pin),
                             'nama': n.isNotEmpty ? n : u,
                             'email': e.isNotEmpty ? e : '$u@vibetech.xyz',
                             'phone': ph.isNotEmpty ? ph : '08123456789',
@@ -3539,10 +4240,12 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
                           };
 
                           await DatabaseHelper.instance.addUser(newUser);
+                          await FirebaseUserService.instance
+                              .saveUserToFirebase(newUser);
                           if (context.mounted) Navigator.pop(context);
                           _showSnackBar(LanguageService.text(
-                            'Akun $u berhasil didaftarkan!',
-                            'Account $u registered successfully!',
+                            'Akun $u berhasil didaftarkan ke SQLite & Firebase RTDB!',
+                            'Account $u registered to SQLite & Firebase RTDB successfully!',
                           ));
                           _loadUsersData();
                         },
@@ -3804,6 +4507,7 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
         uid: uid,
         email: email,
         username: username,
+        docId: user['doc_id']?.toString(),
       );
     } catch (err) {
       debugPrint('[AdminDatabasePage] Error deleteUserDirectly: $err');
@@ -3884,6 +4588,625 @@ class _AdminDatabasePageState extends State<AdminDatabasePage>
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         margin: const EdgeInsets.all(16),
+      ),
+    );
+  }
+
+  // ============================================================================
+  // KONFIGURASI SERVER EMAIL (SMTP) UNTUK ADMINISTRATOR
+  // ============================================================================
+  void _showSmtpConfigDialog() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    Map<String, dynamic>? dbSettings;
+    try {
+      dbSettings = await DatabaseHelper.instance.getEmailSettings(
+            userEmail: widget.currentAdminEmail,
+          ) ??
+          await DatabaseHelper.instance.getEmailSettings();
+    } catch (_) {}
+
+    String initialUser = (dbSettings?['smtp_user']?.toString() ?? '').trim();
+    if (initialUser.isEmpty) {
+      initialUser = (prefs.getString('smtp_user') ?? widget.currentAdminEmail).trim();
+    }
+    String initialPass = (dbSettings?['smtp_pass']?.toString() ?? '').trim();
+    if (initialPass.isEmpty) {
+      initialPass = (prefs.getString('smtp_pass') ?? '').trim();
+    }
+    String initialHost = (dbSettings?['smtp_host']?.toString() ?? '').trim();
+    if (initialHost.isEmpty) {
+      initialHost = (prefs.getString('smtp_host') ?? 'smtp.gmail.com').trim();
+    }
+    int initialPort = (dbSettings?['smtp_port'] as num?)?.toInt() ??
+        prefs.getInt('smtp_port') ??
+        465;
+    String? lastUpdated = dbSettings?['updated_at']?.toString() ??
+        prefs.getString('smtp_updated_at');
+
+    final userController = TextEditingController(text: initialUser);
+    final passController = TextEditingController(text: initialPass);
+    final hostController = TextEditingController(text: initialHost);
+    final portController = TextEditingController(text: initialPort.toString());
+
+    bool isSendingTest = false;
+    bool isSaving = false;
+    bool obscurePass = true;
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) {
+          final bool isConfigured = (userController.text.trim().isNotEmpty &&
+                  passController.text.trim().isNotEmpty) ||
+              (prefs.getBool('smtp_is_active') == true &&
+                  userController.text.trim().isNotEmpty);
+
+          return AlertDialog(
+            backgroundColor: _cardColor,
+            surfaceTintColor: Colors.transparent,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF00E676).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.mark_email_read_rounded,
+                      color: Color(0xFF00E676), size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        LanguageService.text(
+                            'Konfigurasi Email SMTP', 'SMTP Mail Server'),
+                        style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.bold,
+                          color: _textPrimary,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          const Icon(Icons.cloud_sync_rounded,
+                              size: 12, color: Color(0xFF00E676)),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              LanguageService.text(
+                                'Cloud Firestore & SQLite Permanen',
+                                'Cloud Firestore & Local SQLite Permanent',
+                              ),
+                              style: GoogleFonts.poppins(
+                                fontSize: 10,
+                                color: const Color(0xFF00E676),
+                                fontWeight: FontWeight.w600,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Banner Status Aktif & Permanen jika sudah terisi
+                  if (isConfigured)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF00E676).withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: const Color(0xFF00E676).withValues(alpha: 0.35),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.check_circle_rounded,
+                            color: Color(0xFF00E676), size: 20),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                LanguageService.text(
+                                  'STATUS: AKTIF & TERSIMPAN PERMANEN',
+                                  'STATUS: ACTIVE & PERMANENTLY SAVED',
+                                ),
+                                style: GoogleFonts.poppins(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.bold,
+                                  color: const Color(0xFF00E676),
+                                ),
+                              ),
+                              Text(
+                                LanguageService.text(
+                                  'Tersimpan otomatis di SQLite & Cloud. Notifikasi & invoice dikirim otomatis.',
+                                  'Saved in SQLite & Cloud. Notifications & invoices sent automatically.',
+                                ),
+                                style: GoogleFonts.poppins(
+                                  fontSize: 10.5,
+                                  color: _textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                // Info Box Database & Sandi Aplikasi Google
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF7C4DFF).withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: const Color(0xFF7C4DFF).withValues(alpha: 0.2),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.info_outline_rounded,
+                              size: 18, color: Color(0xFF7C4DFF)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              LanguageService.text(
+                                'Gunakan Sandi Aplikasi Google (16 digit) agar pengiriman invoice, transaksi, dan notifikasi otomatis berjalan lancar.',
+                                'Use a 16-character Google App Password so automated transaction invoices and emails work seamlessly.',
+                              ),
+                              style: GoogleFonts.poppins(
+                                fontSize: 11,
+                                color: _textSecondary,
+                                height: 1.4,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      InkWell(
+                        onTap: () async {
+                          final uri = Uri.parse(
+                              'https://myaccount.google.com/apppasswords');
+                          if (await canLaunchUrl(uri)) {
+                            await launchUrl(uri,
+                                mode: LaunchMode.externalApplication);
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color:
+                                const Color(0xFF7C4DFF).withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.open_in_new_rounded,
+                                  size: 14, color: Color(0xFF7C4DFF)),
+                              const SizedBox(width: 6),
+                              Text(
+                                LanguageService.text(
+                                    'Buat Sandi Aplikasi di Google (1-Klik)',
+                                    'Create App Password on Google (1-Tap)'),
+                                style: GoogleFonts.poppins(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: const Color(0xFF7C4DFF),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _buildAdminDialogField(
+                  controller: userController,
+                  label: 'Email Pengirim (Gmail / Domain SMTP)',
+                  icon: Icons.alternate_email_rounded,
+                  keyboardType: TextInputType.emailAddress,
+                ),
+                const SizedBox(height: 12),
+                _buildAdminDialogField(
+                  controller: passController,
+                  label: 'Sandi Aplikasi (16 Karakter)',
+                  icon: Icons.key_rounded,
+                  obscureText: obscurePass,
+                  onToggleObscure: () =>
+                      setDialogState(() => obscurePass = !obscurePass),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: _buildAdminDialogField(
+                        controller: hostController,
+                        label: 'Host SMTP',
+                        icon: Icons.dns_outlined,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 2,
+                      child: _buildAdminDialogField(
+                        controller: portController,
+                        label: 'Port',
+                        icon: Icons.numbers_rounded,
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
+                  ],
+                ),
+                if ((lastUpdated ?? '').isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      const Icon(Icons.check_circle_outline_rounded,
+                          size: 12, color: Color(0xFF00E676)),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          LanguageService.text(
+                            'Sinkronisasi Database aktif (${lastUpdated!})',
+                            'Database sync active (${lastUpdated!})',
+                          ),
+                          style: GoogleFonts.poppins(
+                            fontSize: 10,
+                            color: _textSecondary,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  height: 44,
+                  child: OutlinedButton.icon(
+                    onPressed: isSendingTest
+                        ? null
+                        : () async {
+                            final user = userController.text.trim();
+                            final pass =
+                                passController.text.trim().replaceAll(' ', '');
+                            final host = hostController.text.trim();
+                            final port =
+                                int.tryParse(portController.text.trim()) ?? 465;
+
+                            if (user.isEmpty || pass.isEmpty) {
+                              _showSnackBar(
+                                LanguageService.text(
+                                    'Email pengirim dan Sandi Aplikasi (16 digit) wajib diisi!',
+                                    'Sender email and App Password (16-char) are required!'),
+                                isError: true,
+                              );
+                              return;
+                            }
+
+                            setDialogState(() => isSendingTest = true);
+
+                            final targetEmail = widget.currentAdminEmail.isNotEmpty
+                                ? widget.currentAdminEmail
+                                : user;
+
+                            final res =
+                                await NotificationService.sendDirectSmtpTest(
+                              smtpUser: user,
+                              smtpPass: pass,
+                              targetEmail: targetEmail,
+                              smtpHost:
+                                  host.isNotEmpty ? host : 'smtp.gmail.com',
+                              smtpPort: port,
+                            );
+
+                            if (mounted) {
+                              setDialogState(() => isSendingTest = false);
+                            }
+
+                            if (res['success'] == true) {
+                              try {
+                                await DatabaseHelper.instance.saveEmailSettings(
+                                  smtpUser: user,
+                                  smtpPass: pass,
+                                  smtpHost:
+                                      host.isNotEmpty ? host : 'smtp.gmail.com',
+                                  smtpPort: port,
+                                  userEmail: widget.currentAdminEmail,
+                                  syncToCloud: true,
+                                );
+                                final p = await SharedPreferences.getInstance();
+                                await p.setString('smtp_user', user);
+                                await p.setString('smtp_pass', pass);
+                                await p.setString('smtp_host',
+                                    host.isNotEmpty ? host : 'smtp.gmail.com');
+                                await p.setInt('smtp_port', port);
+                                await p.setBool('smtp_is_active', true);
+                                final nowStr =
+                                    DateTime.now().toString().split('.')[0];
+                                await p.setString('smtp_updated_at', nowStr);
+                                setDialogState(() {
+                                  lastUpdated = nowStr;
+                                });
+                                FirebaseEmailService.instance
+                                    .saveEmailSettings(
+                                      smtpUser: user,
+                                      smtpPass: pass,
+                                      smtpHost: host.isNotEmpty
+                                          ? host
+                                          : 'smtp.gmail.com',
+                                      smtpPort: port,
+                                      userEmail: widget.currentAdminEmail,
+                                    )
+                                    .catchError((_) => false);
+                                await NotificationService.setEmailEnabled(
+                                    true, widget.currentAdminUsername);
+                                if (mounted) {
+                                  setState(() {
+                                    _smtpUser = user;
+                                    _isSmtpActive = true;
+                                  });
+                                }
+                              } catch (_) {}
+
+                              _showSnackBar(
+                                LanguageService.text(
+                                  '✅ Email tes berhasil terkirim! Konfigurasi SMTP langsung AKTIF PERMANEN & tersimpan otomatis.',
+                                  '✅ Test email sent! SMTP is now PERMANENTLY ACTIVE & saved automatically.',
+                                ),
+                              );
+                            } else {
+                              _showSnackBar('${res['message']}', isError: true);
+                            }
+                          },
+                    icon: isSendingTest
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Color(0xFF7C4DFF),
+                            ),
+                          )
+                        : const Icon(Icons.send_rounded, size: 16),
+                    label: Text(
+                      isSendingTest
+                          ? LanguageService.text('Menguji Koneksi...', 'Testing Connection...')
+                          : LanguageService.text(
+                              'Kirim Email Tes ke ${widget.currentAdminEmail.isNotEmpty ? widget.currentAdminEmail : 'Admin'}',
+                              'Send Test Email to ${widget.currentAdminEmail.isNotEmpty ? widget.currentAdminEmail : 'Admin'}'),
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF7C4DFF),
+                      side: const BorderSide(
+                          color: Color(0xFF7C4DFF), width: 1.2),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(dialogCtx, rootNavigator: true).pop(),
+              child: Text(
+                LanguageService.text('Tutup', 'Close'),
+                style: GoogleFonts.poppins(color: _textSecondary),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: isSaving
+                  ? null
+                  : () async {
+                      final user = userController.text.trim();
+                      final pass =
+                          passController.text.trim().replaceAll(' ', '');
+                      final host = hostController.text.trim();
+                      final port =
+                          int.tryParse(portController.text.trim()) ?? 465;
+
+                      if (user.isEmpty) {
+                        _showSnackBar(
+                          LanguageService.text('Email pengirim wajib diisi!',
+                              'Sender email is required!'),
+                          isError: true,
+                        );
+                        return;
+                      }
+
+                      setDialogState(() => isSaving = true);
+
+                      try {
+                        await DatabaseHelper.instance.saveEmailSettings(
+                          smtpUser: user,
+                          smtpPass: pass,
+                          smtpHost: host.isNotEmpty ? host : 'smtp.gmail.com',
+                          smtpPort: port,
+                          userEmail: widget.currentAdminEmail,
+                          syncToCloud: true,
+                        );
+
+                        final p = await SharedPreferences.getInstance();
+                        await p.setString('smtp_user', user);
+                        await p.setString('smtp_pass', pass);
+                        await p.setString('smtp_host',
+                            host.isNotEmpty ? host : 'smtp.gmail.com');
+                        await p.setInt('smtp_port', port);
+                        await p.setBool('smtp_is_active', true);
+                        await p.setString('smtp_updated_at',
+                            DateTime.now().toString().split('.')[0]);
+
+                        FirebaseEmailService.instance
+                            .saveEmailSettings(
+                              smtpUser: user,
+                              smtpPass: pass,
+                              smtpHost:
+                                  host.isNotEmpty ? host : 'smtp.gmail.com',
+                              smtpPort: port,
+                              userEmail: widget.currentAdminEmail,
+                            )
+                            .catchError((_) => false);
+
+                        await NotificationService.setEmailEnabled(
+                            true, widget.currentAdminUsername);
+
+                        if (mounted) {
+                          setState(() {
+                            _smtpUser = user;
+                            _isSmtpActive = true;
+                          });
+                        }
+
+                        if (dialogCtx.mounted) {
+                          Navigator.of(dialogCtx, rootNavigator: true).pop();
+                        }
+
+                        _showSnackBar(
+                          LanguageService.text(
+                            '✅ Konfigurasi SMTP Administrator berhasil disimpan permanen & AKTIF PERMANEN!',
+                            '✅ Administrator SMTP configuration saved permanently & ACTIVE!',
+                          ),
+                        );
+                      } catch (e) {
+                        if (mounted) {
+                          setDialogState(() => isSaving = false);
+                        }
+                        _showSnackBar('Gagal menyimpan SMTP: $e',
+                            isError: true);
+                      }
+                    },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF00E676),
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: isSaving
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : Text(
+                      LanguageService.text('Simpan & Aktifkan', 'Save & Activate'),
+                      style: GoogleFonts.poppins(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}
+
+  Widget _buildAdminDialogField({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    bool obscureText = false,
+    VoidCallback? onToggleObscure,
+    TextInputType keyboardType = TextInputType.text,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+      decoration: BoxDecoration(
+        color: _isDarkMode ? const Color(0xFF1E293D) : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: _isDarkMode
+              ? Colors.white.withValues(alpha: 0.15)
+              : const Color(0xFFE2E8F0),
+          width: 1.2,
+        ),
+      ),
+      child: TextField(
+        controller: controller,
+        obscureText: obscureText,
+        keyboardType: keyboardType,
+        style: GoogleFonts.poppins(
+          color: _textPrimary,
+          fontSize: 13,
+          fontWeight: FontWeight.w500,
+        ),
+        decoration: InputDecoration(
+          filled: true,
+          fillColor: Colors.transparent,
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+          labelText: label,
+          labelStyle: GoogleFonts.poppins(
+            color: _textSecondary,
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+          ),
+          icon: Icon(icon, color: const Color(0xFF7C4DFF), size: 20),
+          suffixIcon: onToggleObscure != null
+              ? IconButton(
+                  icon: Icon(
+                    obscureText
+                        ? Icons.visibility_off_rounded
+                        : Icons.visibility_rounded,
+                    color: _textSecondary,
+                    size: 18,
+                  ),
+                  onPressed: onToggleObscure,
+                )
+              : null,
+        ),
       ),
     );
   }
@@ -4197,7 +5520,11 @@ class _UserPurchaseHistorySheetState extends State<_UserPurchaseHistorySheet>
           Expanded(
             child: _isLoading
                 ? const Center(
-                    child: CircularProgressIndicator(color: Color(0xFF00E5FF)))
+                    child: CircularProgressIndicator(
+                      color: AppColors.primary,
+                      strokeWidth: 2.5,
+                    ),
+                  )
                 : TabBarView(
                     controller: _tabController,
                     children: [
@@ -4964,37 +6291,28 @@ class _UserPurchaseHistorySheetState extends State<_UserPurchaseHistorySheet>
             ),
             ElevatedButton(
               onPressed: () async {
-                // 1. Hapus dari SQLite
-                if (id > 0) {
-                  await DatabaseHelper.instance
-                      .deleteTransaction(id, invoiceNo: invoice);
-                } else if (invoice.isNotEmpty) {
-                  await DatabaseHelper.instance
-                      .deleteTransactionByInvoice(invoice);
-                }
+                HapticFeedback.heavyImpact();
 
-                // 2. Hapus langsung dari Firebase RTDB & Cloud Firestore
-                if (invoice.isNotEmpty) {
-                  await FirebaseTransactionService.instance
-                      .deleteTransactionFromFirebase(
-                    invoiceNo: invoice,
-                    localId: id > 0 ? id : null,
-                  );
-                }
+                // 1. Langsung tutup dialog secara instan
+                Navigator.of(dialogContext, rootNavigator: true).pop();
 
-                // 3. Update state UI
+                // 2. Langsung hapus dari state UI (optimistic UI update)
                 setState(() {
                   _transactions.removeWhere((t) {
-                    final tInv =
-                        (t['invoice_no'] ?? t['id_ref'] ?? '').toString();
+                    final tInv = (t['invoice_no'] ?? t['id_ref'] ?? '')
+                        .toString()
+                        .trim();
                     final tId = (t['id'] as num?)?.toInt();
-                    if (invoice.isNotEmpty && tInv == invoice) return true;
+                    if (invoice.isNotEmpty &&
+                        (tInv == invoice ||
+                            tInv == invoice.replaceAll('INV-', ''))) {
+                      return true;
+                    }
                     if (id > 0 && tId == id) return true;
                     return false;
                   });
                 });
 
-                if (dialogContext.mounted) Navigator.pop(dialogContext);
                 _showSnackBar(
                   LanguageService.text(
                     'Transaksi $invoice berhasil dihapus permanen!',
@@ -5002,6 +6320,28 @@ class _UserPurchaseHistorySheetState extends State<_UserPurchaseHistorySheet>
                   ),
                   isError: true,
                 );
+
+                // 3. Eksekusi penghapusan SQLite & Firebase dengan aman
+                try {
+                  if (id > 0) {
+                    await DatabaseHelper.instance
+                        .deleteTransaction(id, invoiceNo: invoice);
+                  } else if (invoice.isNotEmpty) {
+                    await DatabaseHelper.instance
+                        .deleteTransactionByInvoice(invoice);
+                  }
+
+                  if (invoice.isNotEmpty) {
+                    await FirebaseTransactionService.instance
+                        .deleteTransactionFromFirebase(
+                      invoiceNo: invoice,
+                      localId: id > 0 ? id : null,
+                    );
+                  }
+                } catch (e) {
+                  debugPrint('Error deleting transaction: $e');
+                }
+
                 _loadUserOrdersAndServices();
               },
               style: ElevatedButton.styleFrom(

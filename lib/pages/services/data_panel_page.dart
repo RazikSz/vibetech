@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -10,6 +8,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../constants/constants.dart';
 import '../../database/db_helper.dart';
 import '../../models/service_model.dart';
+import '../../services/cloud_sync_service.dart';
+import '../../services/firebase_transaction_service.dart';
 import '../../services/language_service.dart';
 import '../home/produk_page.dart';
 
@@ -34,16 +34,13 @@ class DataPanelPage extends StatefulWidget {
   State<DataPanelPage> createState() => _DataPanelPageState();
 }
 
-class _DataPanelPageState extends State<DataPanelPage>
-    with SingleTickerProviderStateMixin {
+class _DataPanelPageState extends State<DataPanelPage> {
   List<PurchasedService> _panelList = [];
-  bool _isLoading = true;
   String _activeEmail = 'user@vibetech.com';
+  String _currentUserRole = 'user';
+  bool get _isAdmin =>
+      _currentUserRole == 'admin' || _currentUserRole == 'administrator';
   final Map<int, bool> _showPasswordMap = {};
-
-  late AnimationController _particleController;
-  final List<AppParticle> _particles = [];
-  final math.Random _random = math.Random();
 
   Color get _bgColor =>
       widget.isDarkMode ? AppColors.darkBg : AppColors.lightBg;
@@ -59,24 +56,28 @@ class _DataPanelPageState extends State<DataPanelPage>
   @override
   void initState() {
     super.initState();
-    // Inisialisasi Partikel Cyber Ambient (Dark Mode)
-    _particles.addAll(AppParticle.generateList(_random, count: 20));
-    _particleController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 10),
-    )..repeat();
-    _particleController.addListener(() {
-      AppParticle.updatePositions(_particles);
-    });
-
     _activeEmail = widget.userEmail;
     // Menginisialisasi email aktif dan memuat akun Panel Pterodactyl dari SQLite
     _initAndLoadPanelData();
+
+    // Hubungkan streaming listener real-time Firebase RTDB untuk pembaruan instan
+    _panelRealtimeListener = () {
+      if (mounted) {
+        _loadPanelData();
+      }
+    };
+    CloudSyncService.instance.servicesNotifier
+        .addListener(_panelRealtimeListener!);
   }
+
+  VoidCallback? _panelRealtimeListener;
 
   @override
   void dispose() {
-    _particleController.dispose();
+    if (_panelRealtimeListener != null) {
+      CloudSyncService.instance.servicesNotifier
+          .removeListener(_panelRealtimeListener!);
+    }
     super.dispose();
   }
 
@@ -88,6 +89,10 @@ class _DataPanelPageState extends State<DataPanelPage>
       if (savedEmail != null && savedEmail.isNotEmpty) {
         _activeEmail = savedEmail;
       }
+      final savedRole = prefs.getString('role');
+      if (savedRole != null && savedRole.isNotEmpty) {
+        _currentUserRole = savedRole.toLowerCase();
+      }
     } catch (_) {}
     await _loadPanelData();
   }
@@ -95,14 +100,17 @@ class _DataPanelPageState extends State<DataPanelPage>
   /// Memuat daftar panel hosting milik pengguna dari database SQLite
   Future<void> _loadPanelData() async {
     if (!mounted) return;
-    setState(() => _isLoading = true);
-    final raw = await DatabaseHelper.instance
-        .getServicesByCategory(_activeEmail, 'Panel Hosting');
-    if (mounted) {
-      setState(() {
-        _panelList = raw.map((e) => PurchasedService.fromMap(e)).toList();
-        _isLoading = false;
-      });
+    try {
+      final raw = await DatabaseHelper.instance
+          .getServicesByCategory(_activeEmail, 'Panel Hosting')
+          .timeout(const Duration(seconds: 4), onTimeout: () => []);
+      if (mounted) {
+        setState(() {
+          _panelList = raw.map((e) => PurchasedService.fromMap(e)).toList();
+        });
+      }
+    } catch (e) {
+      debugPrint('[DataPanelPage] Error loading Panel data: $e');
     }
   }
 
@@ -143,6 +151,19 @@ class _DataPanelPageState extends State<DataPanelPage>
 
   /// Menampilkan dialog simulasi penerbitan akun panel baru
   void _showAddPanelDialog() {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat menambah data Panel manual.',
+            'Access Denied! Only Administrators can add manual Panel data.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
     final nameCtrl = TextEditingController(text: 'Panel Node.js / Pterodactyl');
     final urlCtrl =
         TextEditingController(text: 'https://panel.vibetech.xyz:8080');
@@ -204,7 +225,7 @@ class _DataPanelPageState extends State<DataPanelPage>
               if (nameCtrl.text.isEmpty) return;
               final now = DateTime.now();
               await DatabaseHelper.instance.createService({
-                'user_email': widget.userEmail,
+                'user_email': _activeEmail,
                 'nama_produk': nameCtrl.text,
                 'kategori': 'Panel Hosting',
                 'harga': double.tryParse(priceCtrl.text) ?? 25000.0,
@@ -233,6 +254,19 @@ class _DataPanelPageState extends State<DataPanelPage>
   }
 
   void _showDeleteConfirmDialog(int id, String name) {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat menghapus data Panel.',
+            'Access Denied! Only Administrators can delete Panel data.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -263,6 +297,11 @@ class _DataPanelPageState extends State<DataPanelPage>
             ),
             onPressed: () async {
               await DatabaseHelper.instance.deleteService(id);
+              await FirebaseTransactionService.instance.deleteServiceFromFirebase(
+                id,
+                namaProduk: name,
+                userEmail: _activeEmail,
+              );
               if (!ctx.mounted) return;
               Navigator.pop(ctx);
               _loadPanelData();
@@ -314,33 +353,22 @@ class _DataPanelPageState extends State<DataPanelPage>
               color: _textPrimary, fontWeight: FontWeight.bold, fontSize: 18),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.add_circle_outline_rounded,
-                color: AppColors.accent),
-            onPressed: _showAddPanelDialog,
-            tooltip: LanguageService.text('Tambah Panel', 'Add Panel'),
-          ),
+          if (_isAdmin)
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline_rounded,
+                  color: AppColors.accent),
+              onPressed: _showAddPanelDialog,
+              tooltip: LanguageService.text('Tambah Panel', 'Add Panel'),
+            ),
         ],
       ),
       body: Stack(
         children: [
           if (widget.isDarkMode)
-            Positioned.fill(
-              child: AnimatedBuilder(
-                animation: _particleController,
-                builder: (context, child) {
-                  return CustomPaint(
-                    size: MediaQuery.of(context).size,
-                    painter: AppParticlePainter(_particles),
-                  );
-                },
-              ),
-            ),
-          _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : _panelList.isEmpty
-                  ? _buildEmptyState()
-                  : RefreshIndicator(
+            const CyberParticlesLayer(count: 20),
+          _panelList.isEmpty
+              ? _buildEmptyState()
+              : RefreshIndicator(
                       onRefresh: _loadPanelData,
                       child: ListView.builder(
                         padding: const EdgeInsets.symmetric(
@@ -417,17 +445,19 @@ class _DataPanelPageState extends State<DataPanelPage>
                 ),
               ),
             ),
-            const SizedBox(height: 12),
-            TextButton.icon(
-              onPressed: _showAddPanelDialog,
-              icon: Icon(Icons.add_circle_outline_rounded,
-                  color: _textSecondary, size: 16),
-              label: Text(
-                LanguageService.text('Atau Tambah Kredensial Manual',
-                    'Or Add Credentials Manually'),
-                style: GoogleFonts.poppins(color: _textSecondary, fontSize: 12),
+            if (_isAdmin) ...[
+              const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: _showAddPanelDialog,
+                icon: Icon(Icons.add_circle_outline_rounded,
+                    color: _textSecondary, size: 16),
+                label: Text(
+                  LanguageService.text('Atau Tambah Kredensial Manual',
+                      'Or Add Credentials Manually'),
+                  style: GoogleFonts.poppins(color: _textSecondary, fontSize: 12),
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),
@@ -711,14 +741,16 @@ class _DataPanelPageState extends State<DataPanelPage>
                             fontSize: 14,
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline_rounded,
-                              color: AppColors.error, size: 20),
-                          onPressed: () => _showDeleteConfirmDialog(
-                              panel.id ?? 0, panel.namaProduk),
-                          tooltip: LanguageService.tr('hapus'),
-                        ),
+                        if (_isAdmin) ...[
+                          const SizedBox(width: 8),
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline_rounded,
+                                color: AppColors.error, size: 20),
+                            onPressed: () => _showDeleteConfirmDialog(
+                                panel.id ?? 0, panel.namaProduk),
+                            tooltip: LanguageService.tr('hapus'),
+                          ),
+                        ],
                       ],
                     ),
                   ],

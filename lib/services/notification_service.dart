@@ -1,7 +1,11 @@
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart'
+    hide Message;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:mailer/mailer.dart';
@@ -13,17 +17,24 @@ import 'package:vibetech_xyz/database/db_helper.dart';
 import 'package:vibetech_xyz/services/firebase_email_service.dart';
 import 'package:vibetech_xyz/services/language_service.dart';
 import 'package:vibetech_xyz/services/theme_service.dart';
+import 'package:vibetech_xyz/utils/security_helper.dart';
 
 /// ============================================================================
 /// LAYANAN NOTIFIKASI & EMAIL (NOTIFICATION & EMAIL SERVICE) - VIBETECH XYZ
 /// ============================================================================
 /// Layanan terpusat untuk:
 /// 1. Mengelola preferensi pengguna (Push Notification & Email Notification).
-/// 2. Menampilkan in-app Push Notification banner dengan animasi meluncur.
-/// 3. Menampilkan modal simulasi Email masuk & integrasi URL Launcher (Mailto).
-/// 4. Menyimpan riwayat email inbox untuk ditampilkan di Pusat Notifikasi.
-/// 5. Menyediakan antarmuka interaktif untuk uji coba (Test Notification Sheet).
+/// 2. Meminta perizinan notifikasi Android 13+ (POST_NOTIFICATIONS) & iOS.
+/// 3. Menampilkan notifikasi status bar sistem (System Tray Notification / Heads-Up Banner).
+/// 4. Menampilkan in-app Push Notification banner dengan animasi meluncur.
+/// 5. Menampilkan modal simulasi Email masuk & integrasi URL Launcher (Mailto).
+/// 6. Menyimpan riwayat email inbox untuk ditampilkan di Pusat Notifikasi.
+/// 7. Menyediakan antarmuka interaktif untuk uji coba (Test Notification Sheet).
 class NotificationService {
+  static final FlutterLocalNotificationsPlugin _localNotifPlugin =
+      FlutterLocalNotificationsPlugin();
+  static bool _isPluginInitialized = false;
+
   static final ValueNotifier<bool> pushEnabledNotifier =
       ValueNotifier<bool>(true);
   static final ValueNotifier<bool> emailEnabledNotifier =
@@ -75,16 +86,263 @@ class NotificationService {
     },
   ];
 
-  /// Inisialisasi preferensi notifikasi dari SharedPreferences
-  static Future<void> init(String username) async {
+  /// Inisialisasi preferensi notifikasi dari SharedPreferences dan Local Notifications Engine
+  static Future<void> init([String? username]) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final userKey = username.toLowerCase().replaceAll(' ', '_');
-      pushEnabledNotifier.value = prefs.getBool('push_notif_$userKey') ?? true;
-      emailEnabledNotifier.value =
-          prefs.getBool('email_notif_$userKey') ?? true;
+
+      // Deteksi status aktif permanen dari SMTP SharedPreferences
+      final hasSmtpUser = prefs.getString('smtp_user')?.trim().isNotEmpty ?? false;
+      final hasSmtpPass = prefs.getString('smtp_pass')?.trim().isNotEmpty ?? false;
+      final isSmtpConfigured = hasSmtpUser && hasSmtpPass;
+      final bool smtpActive = prefs.getBool('smtp_is_active') ?? isSmtpConfigured;
+
+      if (username != null && username.isNotEmpty) {
+        final userKey = username.toLowerCase().replaceAll(' ', '_');
+        pushEnabledNotifier.value =
+            prefs.getBool('push_notif_$userKey') ?? true;
+        // Jika SMTP sudah dikonfigurasi, email notifikasi permanen aktif
+        emailEnabledNotifier.value =
+            smtpActive ? true : (prefs.getBool('email_notif_$userKey') ?? true);
+      } else {
+        if (smtpActive) {
+          emailEnabledNotifier.value = true;
+        }
+      }
+
+      if (!_isPluginInitialized && !kIsWeb) {
+        const androidInit =
+            AndroidInitializationSettings('@mipmap/launcher_icon');
+        const darwinInit = DarwinInitializationSettings(
+          requestAlertPermission: false,
+          requestBadgePermission: false,
+          requestSoundPermission: false,
+        );
+        const linuxInit =
+            LinuxInitializationSettings(defaultActionName: 'Open notification');
+
+        const initSettings = InitializationSettings(
+          android: androidInit,
+          iOS: darwinInit,
+          macOS: darwinInit,
+          linux: linuxInit,
+        );
+
+        await _localNotifPlugin.initialize(
+          settings: initSettings,
+          onDidReceiveNotificationResponse: (NotificationResponse response) {
+            debugPrint(
+                '[NotificationService] Notifikasi sistem diklik: ${response.payload}');
+          },
+        );
+
+        // Buat Android Notification Channels berkategori
+        if (Platform.isAndroid) {
+          final androidPlugin = _localNotifPlugin
+              .resolvePlatformSpecificImplementation<
+                  AndroidFlutterLocalNotificationsPlugin>();
+
+          if (androidPlugin != null) {
+            await androidPlugin.createNotificationChannel(
+              const AndroidNotificationChannel(
+                'vibetech_general',
+                'Notifikasi Umum & Sistem',
+                description:
+                    'Informasi sistem dan pembaruan aplikasi VibeTech XYZ',
+                importance: Importance.high,
+                enableVibration: true,
+                playSound: true,
+              ),
+            );
+
+            await androidPlugin.createNotificationChannel(
+              const AndroidNotificationChannel(
+                'vibetech_transaction',
+                'Transaksi & Billing',
+                description:
+                    'Bukti pembayaran, verifikasi invoice, dan top-up saldo',
+                importance: Importance.max,
+                enableVibration: true,
+                playSound: true,
+              ),
+            );
+
+            await androidPlugin.createNotificationChannel(
+              const AndroidNotificationChannel(
+                'vibetech_promo',
+                'Promo & Diskon Eksklusif',
+                description:
+                    'Voucher potongan harga VPS, bot WhatsApp, dan panel hosting',
+                importance: Importance.defaultImportance,
+                enableVibration: true,
+                playSound: true,
+              ),
+            );
+
+            await androidPlugin.createNotificationChannel(
+              const AndroidNotificationChannel(
+                'vibetech_security',
+                'Peringatan Keamanan Akun',
+                description:
+                    'Peringatan login baru, perubahan PIN, dan autentikasi 2FA',
+                importance: Importance.max,
+                enableVibration: true,
+                playSound: true,
+              ),
+            );
+          }
+        }
+
+        _isPluginInitialized = true;
+      }
     } catch (e) {
       debugPrint('Error initializing NotificationService: $e');
+    }
+  }
+
+  /// Meminta perizinan notifikasi ke sistem OS Android 13+ (POST_NOTIFICATIONS) atau iOS
+  static Future<bool> requestNotificationPermission(
+    BuildContext context, {
+    bool forceDialog = false,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final hasAskedBefore =
+          prefs.getBool('has_prompted_notif_permission') ?? false;
+
+      if (forceDialog || !hasAskedBefore) {
+        await prefs.setBool('has_prompted_notif_permission', true);
+        if (context.mounted) {
+          final bool? shouldRequest = await showModalBottomSheet<bool>(
+            context: context,
+            isScrollControlled: true,
+            backgroundColor: Colors.transparent,
+            builder: (ctx) => _NotificationPermissionBottomSheet(
+              isDarkMode: ThemeService.isDarkMode,
+            ),
+          );
+          if (shouldRequest != true) return false;
+        }
+      }
+
+      if (kIsWeb) return true;
+
+      if (Platform.isAndroid) {
+        final androidPlugin = _localNotifPlugin
+            .resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin>();
+        final granted =
+            await androidPlugin?.requestNotificationsPermission() ?? true;
+        return granted;
+      } else if (Platform.isIOS || Platform.isMacOS) {
+        final iosPlugin = _localNotifPlugin
+            .resolvePlatformSpecificImplementation<
+                IOSFlutterLocalNotificationsPlugin>();
+        final granted = await iosPlugin?.requestPermissions(
+              alert: true,
+              badge: true,
+              sound: true,
+            ) ??
+            true;
+        return granted;
+      }
+      return true;
+    } catch (e) {
+      debugPrint(
+          '[NotificationService] Error requesting notification permission: $e');
+      return true;
+    }
+  }
+
+  /// Memunculkan notifikasi status bar sistem (System Tray / Heads-Up Banner)
+  static Future<void> showSystemNotification({
+    required String title,
+    required String body,
+    String category = 'Sistem',
+    String? payload,
+    int? id,
+  }) async {
+    if (!isPushEnabled || kIsWeb) return;
+
+    try {
+      if (!_isPluginInitialized) await init();
+
+      final notifId =
+          id ?? DateTime.now().millisecondsSinceEpoch.remainder(100000);
+      final cat = category.toLowerCase();
+
+      String channelId = 'vibetech_general';
+      String channelName = 'Notifikasi Umum & Sistem';
+      Importance importance = Importance.high;
+      Priority priority = Priority.high;
+
+      if (cat.contains('transaksi') ||
+          cat.contains('invoice') ||
+          cat.contains('billing') ||
+          cat.contains('saldo') ||
+          cat.contains('payment') ||
+          cat.contains('success')) {
+        channelId = 'vibetech_transaction';
+        channelName = 'Transaksi & Billing';
+        importance = Importance.max;
+        priority = Priority.max;
+      } else if (cat.contains('promo') ||
+          cat.contains('diskon') ||
+          cat.contains('voucher')) {
+        channelId = 'vibetech_promo';
+        channelName = 'Promo & Diskon Eksklusif';
+        importance = Importance.defaultImportance;
+        priority = Priority.defaultPriority;
+      } else if (cat.contains('keamanan') ||
+          cat.contains('security') ||
+          cat.contains('login') ||
+          cat.contains('2fa') ||
+          cat.contains('pin') ||
+          cat.contains('warning')) {
+        channelId = 'vibetech_security';
+        channelName = 'Peringatan Keamanan Akun';
+        importance = Importance.max;
+        priority = Priority.max;
+      }
+
+      final androidDetails = AndroidNotificationDetails(
+        channelId,
+        channelName,
+        channelDescription: 'Saluran resmi notifikasi VibeTech XYZ',
+        importance: importance,
+        priority: priority,
+        icon: '@mipmap/launcher_icon',
+        enableVibration: true,
+        playSound: true,
+        styleInformation: BigTextStyleInformation(
+          body,
+          htmlFormatBigText: false,
+          contentTitle: title,
+          htmlFormatContentTitle: false,
+        ),
+      );
+
+      const darwinDetails = DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      );
+
+      final notifDetails = NotificationDetails(
+        android: androidDetails,
+        iOS: darwinDetails,
+        macOS: darwinDetails,
+      );
+
+      await _localNotifPlugin.show(
+        id: notifId,
+        title: title,
+        body: body,
+        notificationDetails: notifDetails,
+        payload: payload ?? category,
+      );
+    } catch (e) {
+      debugPrint('[NotificationService] Error showing system notification: $e');
     }
   }
 
@@ -107,6 +365,7 @@ class NotificationService {
       final prefs = await SharedPreferences.getInstance();
       final userKey = username.toLowerCase().replaceAll(' ', '_');
       await prefs.setBool('email_notif_$userKey', value);
+      await prefs.setBool('smtp_is_active', value);
     } catch (e) {
       debugPrint('Error saving email notification setting: $e');
     }
@@ -151,6 +410,7 @@ class NotificationService {
   }
 
   /// Menampilkan In-App Banner Push Notification yang meluncur dari atas layar
+  /// dan memunculkan notifikasi status bar sistem jika diizinkan
   static void showInAppNotification(
     BuildContext context, {
     required String title,
@@ -159,6 +419,13 @@ class NotificationService {
     VoidCallback? onTap,
   }) {
     if (!isPushEnabled) return;
+
+    // 1. Kirim notifikasi status bar sistem (System Tray Notification)
+    showSystemNotification(
+      title: title,
+      body: message,
+      category: type,
+    );
 
     HapticFeedback.mediumImpact();
 
@@ -452,18 +719,24 @@ class NotificationService {
       }
 
       final prefs = await SharedPreferences.getInstance();
-      final smtpUser = (dbSettings?['smtp_user']?.toString() ??
-              prefs.getString('smtp_user') ??
-              'vibetech.official.xyz@gmail.com')
-          .trim();
-      final rawPass = dbSettings?['smtp_pass']?.toString() ??
-          prefs.getString('smtp_pass') ??
-          'fuhs qpvu fskx jmsw';
+      String smtpUser = (dbSettings?['smtp_user']?.toString() ?? '').trim();
+      if (smtpUser.isEmpty) {
+        smtpUser = (prefs.getString('smtp_user') ?? 'vibetech.official.xyz@gmail.com').trim();
+      }
+
+      String rawPass = (dbSettings?['smtp_pass']?.toString() ?? '').trim();
+      if (rawPass.isEmpty) {
+        rawPass = (prefs.getString('smtp_pass') ??
+                SecurityHelper.deobfuscate('PC8yKXorKiwvejwpMSJ6MDcpLQ=='))
+            .trim();
+      }
       final cleanPass = rawPass.replaceAll(' ', '').trim();
-      final smtpHost = (dbSettings?['smtp_host']?.toString() ??
-              prefs.getString('smtp_host') ??
-              'smtp.gmail.com')
-          .trim();
+
+      String smtpHost = (dbSettings?['smtp_host']?.toString() ?? '').trim();
+      if (smtpHost.isEmpty) {
+        smtpHost = (prefs.getString('smtp_host') ?? 'smtp.gmail.com').trim();
+      }
+
       final smtpPort = (dbSettings?['smtp_port'] as num?)?.toInt() ??
           prefs.getInt('smtp_port') ??
           465;
@@ -1695,6 +1968,274 @@ class _TestNotificationSheetState extends State<_TestNotificationSheet> {
                 ),
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// ============================================================================
+/// BOTTOM SHEET PERIZINAN NOTIFIKASI (PERMISSION EXPLANATION SHEET)
+/// ============================================================================
+class _NotificationPermissionBottomSheet extends StatelessWidget {
+  final bool isDarkMode;
+
+  const _NotificationPermissionBottomSheet({required this.isDarkMode});
+
+  Color get _bgColor => isDarkMode ? const Color(0xFF0F1426) : Colors.white;
+  Color get _cardColor =>
+      isDarkMode ? const Color(0xFF171E36) : const Color(0xFFF8FAFC);
+  Color get _borderColor => isDarkMode
+      ? const Color(0xFF7C4DFF).withValues(alpha: 0.25)
+      : const Color(0xFFE2E8F0);
+  Color get _textPrimary => isDarkMode ? Colors.white : const Color(0xFF0F172A);
+  Color get _textSecondary =>
+      isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _bgColor,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        border: Border(
+          top: BorderSide(
+            color: const Color(0xFF7C4DFF).withValues(alpha: 0.4),
+            width: 1.5,
+          ),
+        ),
+      ),
+      padding: EdgeInsets.only(
+        top: 20,
+        left: 24,
+        right: 24,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 28,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // Drag Handle
+          Center(
+            child: Container(
+              width: 44,
+              height: 4,
+              decoration: BoxDecoration(
+                color: _textSecondary.withValues(alpha: 0.3),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 22),
+
+          // Notification Bell Icon with Glowing Gradient
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: const LinearGradient(
+                colors: [Color(0xFF7C4DFF), Color(0xFF00E5FF)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF7C4DFF).withValues(alpha: 0.35),
+                  blurRadius: 18,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.notifications_active_rounded,
+              color: Colors.white,
+              size: 38,
+            ),
+          ),
+          const SizedBox(height: 18),
+
+          // Title
+          Text(
+            LanguageService.text(
+              'Aktifkan Notifikasi VibeTech XYZ',
+              'Enable VibeTech XYZ Notifications',
+            ),
+            textAlign: TextAlign.center,
+            style: GoogleFonts.poppins(
+              fontSize: 18.5,
+              fontWeight: FontWeight.bold,
+              color: _textPrimary,
+            ),
+          ),
+          const SizedBox(height: 8),
+
+          // Subtitle
+          Text(
+            LanguageService.text(
+              'Dapatkan pembaruan instan mengenai status pesanan, bukti pembayaran, promo diskon, dan peringatan keamanan akun langsung di perangkat Anda.',
+              'Get instant updates about order statuses, payment receipts, discount promos, and account security alerts directly on your device.',
+            ),
+            textAlign: TextAlign.center,
+            style: GoogleFonts.poppins(
+              fontSize: 12.5,
+              color: _textSecondary,
+              height: 1.5,
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          // Feature Benefit Cards
+          _buildBenefitItem(
+            icon: Icons.receipt_long_rounded,
+            iconColor: const Color(0xFF00E676),
+            title: LanguageService.text(
+                'Status Invoice & Billing', 'Invoice & Billing Status'),
+            subtitle: LanguageService.text(
+              'Notifikasi verifikasi top-up dan konfirmasi pembayaran seketika.',
+              'Instant verification for top-ups and payment confirmations.',
+            ),
+          ),
+          const SizedBox(height: 10),
+          _buildBenefitItem(
+            icon: Icons.local_offer_rounded,
+            iconColor: const Color(0xFFFF9100),
+            title: LanguageService.text('Promo & Diskon Eksklusif',
+                'Exclusive Promos & Discounts'),
+            subtitle: LanguageService.text(
+              'Pemberitahuan voucher potongan harga VPS dan panel hosting.',
+              'Special voucher alerts for VPS and hosting panel discounts.',
+            ),
+          ),
+          const SizedBox(height: 10),
+          _buildBenefitItem(
+            icon: Icons.shield_rounded,
+            iconColor: const Color(0xFF00B0FF),
+            title: LanguageService.text(
+                'Keamanan & Sistem', 'Security & System Alerts'),
+            subtitle: LanguageService.text(
+              'Peringatan login baru, token kadaluarsa, dan informasi server.',
+              'Alerts for new logins, expiry reminders, and server updates.',
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // Action Buttons
+          Row(
+            children: [
+              // Nanti Saja Button
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    side: BorderSide(color: _borderColor),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  child: Text(
+                    LanguageService.text('Nanti Saja', 'Not Now'),
+                    style: GoogleFonts.poppins(
+                      color: _textSecondary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13.5,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+
+              // Izinkan Notifikasi Button
+              Expanded(
+                flex: 2,
+                child: ElevatedButton(
+                  onPressed: () {
+                    HapticFeedback.mediumImpact();
+                    Navigator.pop(context, true);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF7C4DFF),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    elevation: 4,
+                    shadowColor:
+                        const Color(0xFF7C4DFF).withValues(alpha: 0.4),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.check_circle_rounded,
+                          size: 18, color: Colors.white),
+                      const SizedBox(width: 8),
+                      Text(
+                        LanguageService.text(
+                            'Izinkan Notifikasi', 'Allow Notifications'),
+                        style: GoogleFonts.poppins(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBenefitItem({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String subtitle,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _cardColor,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _borderColor),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: iconColor.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: iconColor, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: GoogleFonts.poppins(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: _textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: GoogleFonts.poppins(
+                    fontSize: 11,
+                    color: _textSecondary,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),

@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -10,6 +8,8 @@ import 'package:vibetech_xyz/database/db_helper.dart';
 import 'package:vibetech_xyz/pages/home/keranjang_page.dart';
 import 'package:vibetech_xyz/pages/payment/pembayaran_page.dart';
 import 'package:vibetech_xyz/services/cart_service.dart';
+import 'package:vibetech_xyz/services/cloud_sync_service.dart';
+import 'package:vibetech_xyz/services/firebase_product_service.dart';
 import 'package:vibetech_xyz/services/language_service.dart';
 import 'package:vibetech_xyz/services/notification_service.dart';
 
@@ -50,38 +50,61 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
   };
 
   late AnimationController _animController;
-  late AnimationController _particleController;
-  final List<AppParticle> _particles = [];
-  final math.Random _random = math.Random();
 
   bool _isAdmin = false;
   String _currentUserRole = 'user';
   String _currentUserEmail = 'user@vibetech.com';
+  VoidCallback? _productsRealtimeListener;
+  List<Map<String, dynamic>> _products = DatabaseHelper.cachedProducts;
+
+  Future<void> _loadProducts() async {
+    final prods = await DatabaseHelper.instance.getAllProducts();
+    if (mounted) {
+      setState(() {
+        _products = prods;
+      });
+    }
+  }
 
   @override
   void initState() {
     super.initState();
+    // Memuat data produk langsung dari cache memori & SQLite secara instan
+    _loadProducts();
     // Menetapkan kategori awal sesuai parameter yang diteruskan
     _selectedCategory =
         widget.initialCategoryIndex.clamp(0, _categories.length - 1);
 
-    // Inisialisasi Partikel Cyber Ambient (Dark Mode)
-    _particles.addAll(AppParticle.generateList(_random, count: 22));
-    _particleController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 10),
-    )..repeat();
-    _particleController.addListener(() {
-      AppParticle.updatePositions(_particles);
-    });
-
     // Menginisialisasi controller animasi entrance fade & slide
     _animController = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1000));
+        vsync: this, duration: const Duration(milliseconds: 600));
     _animController.forward();
 
     // Memeriksa peran akun pengguna dari database SQLite
     _checkUserRole();
+    // Sinkronisasi otomatis data katalog produk dari Firebase Cloud
+    _syncProductsFromCloudInBackground();
+
+    // Hubungkan listener real-time Firebase RTDB untuk pembaruan produk instan
+    _productsRealtimeListener = () {
+      if (mounted) {
+        _loadProducts();
+      }
+    };
+    CloudSyncService.instance.productsNotifier
+        .addListener(_productsRealtimeListener!);
+  }
+
+  Future<void> _syncProductsFromCloudInBackground() async {
+    try {
+      final updated =
+          await FirebaseProductService.instance.syncProductsFromFirebase();
+      if (updated > 0 && mounted) {
+        setState(() {
+          _loadProducts();
+        });
+      }
+    } catch (_) {}
   }
 
   /// Memverifikasi hak akses pengguna (Member vs Administrator) langsung ke SQLite
@@ -112,7 +135,10 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
 
   @override
   void dispose() {
-    _particleController.dispose();
+    if (_productsRealtimeListener != null) {
+      CloudSyncService.instance.productsNotifier
+          .removeListener(_productsRealtimeListener!);
+    }
     _animController.dispose();
     super.dispose();
   }
@@ -837,6 +863,19 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
   // ===     DIALOG 2: ATUR DISKON PRODUK TERTENTU     ===
   // =====================================================
   void _showSetDiscountDialog(Map<String, dynamic> product) {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat mengatur diskon produk.',
+            'Access Denied! Only Administrators can set product discounts.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
     final double rawPrice = (product['harga'] as num?)?.toDouble() ?? 0.0;
     final double currentDiscount =
         (product['diskon'] as num?)?.toDouble() ?? 0.0;
@@ -1063,6 +1102,45 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
             actionsOverflowButtonSpacing: 8,
             actionsAlignment: MainAxisAlignment.end,
             actions: [
+              if (currentDiscount > 0)
+                TextButton.icon(
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.error,
+                  ),
+                  icon: const Icon(Icons.delete_outline_rounded,
+                      color: AppColors.error, size: 18),
+                  label: Text(
+                    LanguageService.text('Hapus Diskon', 'Remove Discount'),
+                    style: GoogleFonts.poppins(
+                      color: AppColors.error,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    await DatabaseHelper.instance
+                        .deleteProductDiscount(product['id'] as int);
+                    if (!mounted) return;
+                    setState(() {});
+                    final String pName =
+                        product['nama']?.toString() ?? 'Produk';
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          LanguageService.text(
+                            'Diskon untuk "$pName" berhasil dihapus dari database & Firebase!',
+                            'Discount for "$pName" removed from database & Firebase!',
+                          ),
+                          style: GoogleFonts.poppins(),
+                        ),
+                        backgroundColor: AppColors.error,
+                        behavior: SnackBarBehavior.floating,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                    );
+                  },
+                ),
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
                 child: Text(
@@ -1094,7 +1172,8 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
                   if (finalDiscount > 0) {
                     NotificationService.broadcastPromoDiscount(
                       context,
-                      title: '🔥 Promo Diskon $pName ${finalDiscount.toInt()}%!',
+                      title:
+                          '🔥 Promo Diskon $pName ${finalDiscount.toInt()}%!',
                       subject:
                           '🔥 Promo Spesial: Diskon ${finalDiscount.toInt()}% untuk $pName!',
                       message:
@@ -1145,6 +1224,19 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
   // ===     DIALOG 3: PROMO DISKON MASSAL KATALOG     ===
   // =====================================================
   void _showGlobalPromoDialog() {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat mengatur promo diskon massal.',
+            'Access Denied! Only Administrators can set bulk discount promo.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
     String targetCategory = 'Semua';
     double promoDiscount = 20.0;
     final discountCtrl = TextEditingController(text: '20');
@@ -1304,6 +1396,42 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
             actionsOverflowButtonSpacing: 8,
             actionsAlignment: MainAxisAlignment.end,
             actions: [
+              TextButton.icon(
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.error,
+                ),
+                icon: const Icon(Icons.delete_sweep_rounded,
+                    color: AppColors.error, size: 18),
+                label: Text(
+                  LanguageService.text('Hapus Diskon', 'Remove Discount'),
+                  style: GoogleFonts.poppins(
+                    color: AppColors.error,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  await DatabaseHelper.instance
+                      .removeCategoryDiscount(targetCategory);
+                  if (!mounted) return;
+                  setState(() {});
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        LanguageService.text(
+                          'Diskon untuk "$targetCategory" berhasil dihapus dari database & Firebase!',
+                          'Discount for "$targetCategory" removed from database & Firebase!',
+                        ),
+                        style: GoogleFonts.poppins(),
+                      ),
+                      backgroundColor: AppColors.error,
+                      behavior: SnackBarBehavior.floating,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                  );
+                },
+              ),
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
                 child: Text(
@@ -1384,6 +1512,19 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
   }
 
   void _showDeleteProductDialog(int id, String productName) {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat menghapus produk.',
+            'Access Denied! Only Administrators can delete products.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1690,6 +1831,29 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
           ],
         ),
         actions: [
+          IconButton(
+            icon:
+                const Icon(Icons.sync_rounded, color: AppColors.cyan, size: 22),
+            tooltip: LanguageService.text(
+                'Sinkronkan Diskon & Produk', 'Sync Discounts & Products'),
+            onPressed: () async {
+              HapticFeedback.lightImpact();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    LanguageService.text(
+                        'Menyinkronkan diskon & produk dari Firebase...',
+                        'Syncing discounts & products from Firebase...'),
+                    style: GoogleFonts.poppins(),
+                  ),
+                  duration: const Duration(seconds: 1),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+              await FirebaseProductService.instance.syncProductsFromFirebase();
+              if (mounted) setState(() {});
+            },
+          ),
           if (_isAdmin) ...[
             IconButton(
               icon: const Icon(Icons.local_offer_rounded,
@@ -1757,26 +1921,10 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
       body: Stack(
         children: [
           if (widget.isDarkMode)
-            Positioned.fill(
-              child: AnimatedBuilder(
-                animation: _particleController,
-                builder: (context, child) {
-                  return CustomPaint(
-                    size: MediaQuery.of(context).size,
-                    painter: AppParticlePainter(_particles),
-                  );
-                },
-              ),
-            ),
-          FutureBuilder<List<Map<String, dynamic>>>(
-            future: DatabaseHelper.instance.getAllProducts(),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
-
-              final allProductsFromDb = snapshot.data ?? [];
-              final filteredProducts = allProductsFromDb.where((p) {
+            const CyberParticlesLayer(count: 18),
+          Builder(
+            builder: (context) {
+              final filteredProducts = _products.where((p) {
                 final cat = p['kategori']?.toString().toLowerCase() ?? '';
                 return cat.contains(currentCategory.toLowerCase());
               }).toList();
@@ -1846,684 +1994,756 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
 
                   // Product List
                   Expanded(
-                    child: filteredProducts.isEmpty
-                        ? Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
+                    child: RefreshIndicator(
+                      color: AppColors.primary,
+                      backgroundColor: _cardColor,
+                      onRefresh: () async {
+                        await FirebaseProductService.instance
+                            .syncProductsFromFirebase();
+                        if (mounted) setState(() {});
+                      },
+                      child: filteredProducts.isEmpty
+                          ? ListView(
+                              physics: const AlwaysScrollableScrollPhysics(
+                                  parent: BouncingScrollPhysics()),
                               children: [
-                                Icon(Icons.inventory_2_outlined,
-                                    size: 60,
-                                    color:
-                                        _textSecondary.withValues(alpha: 0.3)),
-                                const SizedBox(height: 12),
-                                Text(
-                                  LanguageService.text(
-                                    'Belum ada produk di kategori $currentCategory.',
-                                    'No products available in $currentCategory.',
-                                  ),
-                                  style: GoogleFonts.poppins(
-                                      color: _textSecondary, fontSize: 13),
-                                ),
-                                if (_isAdmin) ...[
-                                  const SizedBox(height: 16),
-                                  ElevatedButton.icon(
-                                    onPressed: () => _showAdminProductForm(
-                                        category: currentCategory),
-                                    icon: const Icon(Icons.add,
-                                        color: Colors.white, size: 18),
-                                    label: Text(
-                                      LanguageService.text(
-                                          'Tambah Produk $currentCategory',
-                                          'Add $currentCategory Product'),
-                                      style: GoogleFonts.poppins(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.bold),
-                                    ),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: AppColors.primary,
-                                      shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(12)),
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          )
-                        : ListView.builder(
-                            physics: const BouncingScrollPhysics(),
-                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                            itemCount: _isAdmin
-                                ? filteredProducts.length + 1
-                                : filteredProducts.length,
-                            itemBuilder: (context, index) {
-                              if (index == filteredProducts.length &&
-                                  _isAdmin) {
-                                return Padding(
-                                  padding: const EdgeInsets.only(
-                                      top: 10, bottom: 30),
-                                  child: Align(
-                                    alignment: Alignment.centerRight,
-                                    child: BounceTap(
-                                      onTap: () {
-                                        HapticFeedback.selectionClick();
-                                        _showAdminProductForm(
-                                            category: currentCategory);
-                                      },
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 18, vertical: 12),
-                                        decoration: BoxDecoration(
-                                          color: AppColors.primary,
-                                          borderRadius:
-                                              BorderRadius.circular(16),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: AppColors.primary
-                                                  .withValues(alpha: 0.3),
-                                              blurRadius: 10,
-                                              offset: const Offset(0, 4),
-                                            ),
-                                          ],
+                                SizedBox(
+                                  height:
+                                      MediaQuery.of(context).size.height * 0.4,
+                                  child: Center(
+                                    child: Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(Icons.inventory_2_outlined,
+                                            size: 60,
+                                            color: _textSecondary.withValues(
+                                                alpha: 0.3)),
+                                        const SizedBox(height: 12),
+                                        Text(
+                                          LanguageService.text(
+                                            'Belum ada produk di kategori $currentCategory.',
+                                            'No products available in $currentCategory.',
+                                          ),
+                                          style: GoogleFonts.poppins(
+                                              color: _textSecondary,
+                                              fontSize: 13),
                                         ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            const Icon(Icons.add_rounded,
-                                                color: Colors.white, size: 20),
-                                            const SizedBox(width: 8),
-                                            Text(
+                                        if (_isAdmin) ...[
+                                          const SizedBox(height: 16),
+                                          ElevatedButton.icon(
+                                            onPressed: () =>
+                                                _showAdminProductForm(
+                                                    category: currentCategory),
+                                            icon: const Icon(Icons.add,
+                                                color: Colors.white, size: 18),
+                                            label: Text(
                                               LanguageService.text(
                                                   'Tambah Produk $currentCategory',
                                                   'Add $currentCategory Product'),
                                               style: GoogleFonts.poppins(
-                                                color: Colors.white,
-                                                fontWeight: FontWeight.bold,
-                                                fontSize: 13,
-                                              ),
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.bold),
                                             ),
-                                          ],
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor:
+                                                  AppColors.primary,
+                                              shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                          12)),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            )
+                          : ListView.builder(
+                              physics: const AlwaysScrollableScrollPhysics(
+                                  parent: BouncingScrollPhysics()),
+                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                              itemCount: _isAdmin
+                                  ? filteredProducts.length + 1
+                                  : filteredProducts.length,
+                              itemBuilder: (context, index) {
+                                if (index == filteredProducts.length &&
+                                    _isAdmin) {
+                                  return Padding(
+                                    padding: const EdgeInsets.only(
+                                        top: 10, bottom: 30),
+                                    child: Align(
+                                      alignment: Alignment.centerRight,
+                                      child: BounceTap(
+                                        onTap: () {
+                                          HapticFeedback.selectionClick();
+                                          _showAdminProductForm(
+                                              category: currentCategory);
+                                        },
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 18, vertical: 12),
+                                          decoration: BoxDecoration(
+                                            color: AppColors.primary,
+                                            borderRadius:
+                                                BorderRadius.circular(16),
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: AppColors.primary
+                                                    .withValues(alpha: 0.3),
+                                                blurRadius: 10,
+                                                offset: const Offset(0, 4),
+                                              ),
+                                            ],
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              const Icon(Icons.add_rounded,
+                                                  color: Colors.white,
+                                                  size: 20),
+                                              const SizedBox(width: 8),
+                                              Text(
+                                                LanguageService.text(
+                                                    'Tambah Produk $currentCategory',
+                                                    'Add $currentCategory Product'),
+                                                style: GoogleFonts.poppins(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                );
-                              }
+                                  );
+                                }
 
-                              final product = filteredProducts[index];
-                              final productCategory =
-                                  product['kategori']?.toString() ??
-                                      currentCategory;
-                              final iconData =
-                                  _getIconForCategory(productCategory);
-                              final double rawHarga =
-                                  (product['harga'] as num?)?.toDouble() ?? 0.0;
-                              final double diskon =
-                                  (product['diskon'] as num?)?.toDouble() ??
-                                      0.0;
-                              final bool hasDiscount = diskon > 0;
-                              final double hargaFinal = hasDiscount
-                                  ? (rawHarga * (1.0 - (diskon / 100.0)))
-                                  : rawHarga;
-                              final int stok =
-                                  (product['stok'] as num?)?.toInt() ?? 0;
+                                final product = filteredProducts[index];
+                                final productCategory =
+                                    product['kategori']?.toString() ??
+                                        currentCategory;
+                                final iconData =
+                                    _getIconForCategory(productCategory);
+                                final double rawHarga =
+                                    (product['harga'] as num?)?.toDouble() ??
+                                        0.0;
+                                final double diskon =
+                                    (product['diskon'] as num?)?.toDouble() ??
+                                        0.0;
+                                final bool hasDiscount = diskon > 0;
+                                final double hargaFinal = hasDiscount
+                                    ? (rawHarga * (1.0 - (diskon / 100.0)))
+                                    : rawHarga;
+                                final int stok =
+                                    (product['stok'] as num?)?.toInt() ?? 0;
 
-                              return TweenAnimationBuilder<double>(
-                                tween: Tween(begin: 0.0, end: 1.0),
-                                duration:
-                                    Duration(milliseconds: 300 + (index * 80)),
-                                curve: Curves.easeOutCubic,
-                                builder: (context, value, child) {
-                                  return Transform.translate(
-                                      offset: Offset(0, 20 * (1 - value)),
-                                      child: Opacity(
-                                          opacity: value, child: child));
-                                },
-                                child: Container(
+                                return Container(
                                   margin: const EdgeInsets.only(bottom: 14),
-                                  padding: const EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                    color: _cardColor,
-                                    borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(
-                                      color: hasDiscount
-                                          ? const Color(0xFFFF5722)
-                                              .withValues(alpha: 0.45)
-                                          : (_isAdmin
-                                              ? AppColors.primary
-                                                  .withValues(alpha: 0.2)
-                                              : _textSecondary.withValues(
-                                                  alpha: 0.08)),
-                                    ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: hasDiscount
-                                            ? const Color(0xFFFF5722)
-                                                .withValues(alpha: 0.08)
-                                            : Colors.black.withValues(
-                                                alpha: widget.isDarkMode
-                                                    ? 0.2
-                                                    : 0.03),
-                                        blurRadius: 10,
-                                        offset: const Offset(0, 4),
-                                      )
-                                    ],
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      // Top Row: Category icon, name, stock badge, discount badge, and price
-                                      Row(
+                                      padding: const EdgeInsets.all(16),
+                                      decoration: BoxDecoration(
+                                        color: _cardColor,
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(
+                                          color: hasDiscount
+                                              ? const Color(0xFFFF5722)
+                                                  .withValues(alpha: 0.45)
+                                              : (_isAdmin
+                                                  ? AppColors.primary
+                                                      .withValues(alpha: 0.2)
+                                                  : _textSecondary.withValues(
+                                                      alpha: 0.08)),
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: hasDiscount
+                                                ? const Color(0xFFFF5722)
+                                                    .withValues(alpha: 0.08)
+                                                : Colors.black.withValues(
+                                                    alpha: widget.isDarkMode
+                                                        ? 0.2
+                                                        : 0.03),
+                                            blurRadius: 10,
+                                            offset: const Offset(0, 4),
+                                          )
+                                        ],
+                                      ),
+                                      child: Column(
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: [
-                                          Container(
-                                            padding: const EdgeInsets.all(12),
-                                            decoration: BoxDecoration(
-                                              color: hasDiscount
-                                                  ? const Color(0xFFFF5722)
-                                                      .withValues(alpha: 0.14)
-                                                  : AppColors.primary
-                                                      .withValues(alpha: 0.12),
-                                              borderRadius:
-                                                  BorderRadius.circular(14),
-                                            ),
-                                            child: Icon(
-                                              iconData,
-                                              color: hasDiscount
-                                                  ? const Color(0xFFFF5722)
-                                                  : AppColors.primary,
-                                              size: 24,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 14),
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Row(
+                                          // Top Row: Category icon, name, stock badge, discount badge, and price
+                                          Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Container(
+                                                padding:
+                                                    const EdgeInsets.all(12),
+                                                decoration: BoxDecoration(
+                                                  color: hasDiscount
+                                                      ? const Color(0xFFFF5722)
+                                                          .withValues(
+                                                              alpha: 0.14)
+                                                      : AppColors.primary
+                                                          .withValues(
+                                                              alpha: 0.12),
+                                                  borderRadius:
+                                                      BorderRadius.circular(14),
+                                                ),
+                                                child: Icon(
+                                                  iconData,
+                                                  color: hasDiscount
+                                                      ? const Color(0xFFFF5722)
+                                                      : AppColors.primary,
+                                                  size: 24,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 14),
+                                              Expanded(
+                                                child: Column(
                                                   crossAxisAlignment:
                                                       CrossAxisAlignment.start,
                                                   children: [
-                                                    Expanded(
-                                                      child: Text(
-                                                        product['nama']
-                                                                ?.toString() ??
-                                                            '',
-                                                        maxLines: 2,
-                                                        overflow: TextOverflow
-                                                            .ellipsis,
-                                                        style:
-                                                            GoogleFonts.poppins(
-                                                          fontWeight:
-                                                              FontWeight.bold,
-                                                          color: _textPrimary,
-                                                          fontSize: 15,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                    const SizedBox(width: 8),
-                                                    Wrap(
-                                                      spacing: 6,
-                                                      runSpacing: 4,
+                                                    Row(
                                                       crossAxisAlignment:
-                                                          WrapCrossAlignment
-                                                              .center,
+                                                          CrossAxisAlignment
+                                                              .start,
                                                       children: [
-                                                        if (hasDiscount)
-                                                          Container(
-                                                            padding:
-                                                                const EdgeInsets
+                                                        Expanded(
+                                                          child: Text(
+                                                            product['nama']
+                                                                    ?.toString() ??
+                                                                '',
+                                                            maxLines: 2,
+                                                            overflow:
+                                                                TextOverflow
+                                                                    .ellipsis,
+                                                            style: GoogleFonts
+                                                                .poppins(
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .bold,
+                                                              color:
+                                                                  _textPrimary,
+                                                              fontSize: 15,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                        const SizedBox(
+                                                            width: 8),
+                                                        Wrap(
+                                                          spacing: 6,
+                                                          runSpacing: 4,
+                                                          crossAxisAlignment:
+                                                              WrapCrossAlignment
+                                                                  .center,
+                                                          children: [
+                                                            if (hasDiscount)
+                                                              Container(
+                                                                padding: const EdgeInsets
                                                                     .symmetric(
                                                                     horizontal:
                                                                         7,
                                                                     vertical:
                                                                         2.5),
-                                                            decoration:
-                                                                BoxDecoration(
-                                                              gradient:
-                                                                  const LinearGradient(
-                                                                colors: [
-                                                                  Color(
-                                                                      0xFFFF5722),
-                                                                  Color(
-                                                                      0xFFFF1744)
-                                                                ],
-                                                              ),
-                                                              borderRadius:
-                                                                  BorderRadius
-                                                                      .circular(
-                                                                          7),
-                                                              boxShadow: [
-                                                                BoxShadow(
-                                                                  color: const Color(
-                                                                          0xFFFF5722)
-                                                                      .withValues(
-                                                                          alpha:
-                                                                              0.35),
-                                                                  blurRadius: 4,
-                                                                  offset:
-                                                                      const Offset(
-                                                                          0,
-                                                                          1.5),
+                                                                decoration:
+                                                                    BoxDecoration(
+                                                                  gradient:
+                                                                      const LinearGradient(
+                                                                    colors: [
+                                                                      Color(
+                                                                          0xFFFF5722),
+                                                                      Color(
+                                                                          0xFFFF1744)
+                                                                    ],
+                                                                  ),
+                                                                  borderRadius:
+                                                                      BorderRadius
+                                                                          .circular(
+                                                                              7),
+                                                                  boxShadow: [
+                                                                    BoxShadow(
+                                                                      color: const Color(
+                                                                              0xFFFF5722)
+                                                                          .withValues(
+                                                                              alpha: 0.35),
+                                                                      blurRadius:
+                                                                          4,
+                                                                      offset:
+                                                                          const Offset(
+                                                                              0,
+                                                                              1.5),
+                                                                    ),
+                                                                  ],
                                                                 ),
-                                                              ],
-                                                            ),
-                                                            child: Text(
-                                                              'DISKON ${diskon.toStringAsFixed(diskon.truncateToDouble() == diskon ? 0 : 1)}%',
-                                                              style: GoogleFonts
-                                                                  .poppins(
-                                                                color: Colors
-                                                                    .white,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .w800,
-                                                                fontSize: 9.5,
+                                                                child: Text(
+                                                                  'DISKON ${diskon.toStringAsFixed(diskon.truncateToDouble() == diskon ? 0 : 1)}%',
+                                                                  style: GoogleFonts
+                                                                      .poppins(
+                                                                    color: Colors
+                                                                        .white,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w800,
+                                                                    fontSize:
+                                                                        9.5,
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            Container(
+                                                              padding:
+                                                                  const EdgeInsets
+                                                                      .symmetric(
+                                                                      horizontal:
+                                                                          8,
+                                                                      vertical:
+                                                                          3),
+                                                              decoration:
+                                                                  BoxDecoration(
+                                                                color: (stok > 0
+                                                                        ? AppColors
+                                                                            .success
+                                                                        : AppColors
+                                                                            .error)
+                                                                    .withValues(
+                                                                        alpha:
+                                                                            0.15),
+                                                                borderRadius:
+                                                                    BorderRadius
+                                                                        .circular(
+                                                                            8),
+                                                              ),
+                                                              child: Text(
+                                                                LanguageService.text(
+                                                                    'Stok: $stok',
+                                                                    'Stock: $stok'),
+                                                                style:
+                                                                    GoogleFonts
+                                                                        .poppins(
+                                                                  color: stok >
+                                                                          0
+                                                                      ? AppColors
+                                                                          .success
+                                                                      : AppColors
+                                                                          .error,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .bold,
+                                                                  fontSize: 10,
+                                                                ),
                                                               ),
                                                             ),
-                                                          ),
-                                                        Container(
-                                                          padding:
-                                                              const EdgeInsets
-                                                                  .symmetric(
-                                                                  horizontal: 8,
-                                                                  vertical: 3),
-                                                          decoration:
-                                                              BoxDecoration(
-                                                            color: (stok > 0
-                                                                    ? AppColors
-                                                                        .success
-                                                                    : AppColors
-                                                                        .error)
-                                                                .withValues(
-                                                                    alpha:
-                                                                        0.15),
-                                                            borderRadius:
-                                                                BorderRadius
-                                                                    .circular(
-                                                                        8),
-                                                          ),
-                                                          child: Text(
-                                                            LanguageService.text(
-                                                                'Stok: $stok',
-                                                                'Stock: $stok'),
-                                                            style: GoogleFonts
-                                                                .poppins(
-                                                              color: stok > 0
-                                                                  ? AppColors
-                                                                      .success
-                                                                  : AppColors
-                                                                      .error,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .bold,
-                                                              fontSize: 10,
-                                                            ),
-                                                          ),
+                                                          ],
                                                         ),
                                                       ],
                                                     ),
-                                                  ],
-                                                ),
-                                                const SizedBox(height: 4),
-                                                if (hasDiscount)
-                                                  Wrap(
-                                                    spacing: 8,
-                                                    crossAxisAlignment:
-                                                        WrapCrossAlignment
-                                                            .center,
-                                                    children: [
-                                                      Text(
-                                                        _formatRupiah(
-                                                            hargaFinal),
-                                                        style:
-                                                            GoogleFonts.poppins(
-                                                          color:
-                                                              AppColors.success,
-                                                          fontWeight:
-                                                              FontWeight.w800,
-                                                          fontSize: 15.5,
-                                                        ),
-                                                      ),
+                                                    const SizedBox(height: 4),
+                                                    if (hasDiscount)
+                                                      Wrap(
+                                                        spacing: 8,
+                                                        crossAxisAlignment:
+                                                            WrapCrossAlignment
+                                                                .center,
+                                                        children: [
+                                                          Text(
+                                                            _formatRupiah(
+                                                                hargaFinal),
+                                                            style: GoogleFonts
+                                                                .poppins(
+                                                              color: AppColors
+                                                                  .success,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w800,
+                                                              fontSize: 15.5,
+                                                            ),
+                                                          ),
+                                                          Text(
+                                                            _formatRupiah(
+                                                                rawHarga),
+                                                            style: GoogleFonts
+                                                                .poppins(
+                                                              color: _textSecondary
+                                                                  .withValues(
+                                                                      alpha:
+                                                                          0.6),
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w500,
+                                                              fontSize: 11.5,
+                                                              decoration:
+                                                                  TextDecoration
+                                                                      .lineThrough,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      )
+                                                    else
                                                       Text(
                                                         _formatRupiah(rawHarga),
                                                         style:
                                                             GoogleFonts.poppins(
-                                                          color: _textSecondary
-                                                              .withValues(
-                                                                  alpha: 0.6),
+                                                          color:
+                                                              AppColors.primary,
                                                           fontWeight:
-                                                              FontWeight.w500,
-                                                          fontSize: 11.5,
-                                                          decoration:
-                                                              TextDecoration
-                                                                  .lineThrough,
+                                                              FontWeight.bold,
+                                                          fontSize: 15,
                                                         ),
                                                       ),
-                                                    ],
-                                                  )
-                                                else
-                                                  Text(
-                                                    _formatRupiah(rawHarga),
-                                                    style: GoogleFonts.poppins(
-                                                      color: AppColors.primary,
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                      fontSize: 15,
-                                                    ),
-                                                  ),
-                                              ],
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 10),
+                                          Text(
+                                            product['deskripsi']?.toString() ??
+                                                '',
+                                            style: GoogleFonts.poppins(
+                                              color: _textSecondary,
+                                              fontSize: 12,
+                                              height: 1.4,
                                             ),
                                           ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 10),
-                                      Text(
-                                        product['deskripsi']?.toString() ?? '',
-                                        style: GoogleFonts.poppins(
-                                          color: _textSecondary,
-                                          fontSize: 12,
-                                          height: 1.4,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 12),
-                                      const Divider(height: 1),
-                                      const SizedBox(height: 10),
+                                          const SizedBox(height: 12),
+                                          const Divider(height: 1),
+                                          const SizedBox(height: 10),
 
-                                      // Bottom Row: Action buttons based on Role (No overflow guaranteed)
-                                      Row(
-                                        children: [
-                                          if (_isAdmin) ...[
-                                            // Admin Controls: Diskon, Edit & Delete
-                                            Expanded(
-                                              child: Wrap(
-                                                spacing: 6,
-                                                runSpacing: 6,
-                                                crossAxisAlignment:
-                                                    WrapCrossAlignment.center,
-                                                children: [
-                                                  InkWell(
-                                                    onTap: () {
-                                                      HapticFeedback
-                                                          .lightImpact();
-                                                      _showSetDiscountDialog(
-                                                          product);
-                                                    },
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                            8),
-                                                    child: Container(
-                                                      padding: const EdgeInsets
-                                                          .symmetric(
-                                                          horizontal: 9,
-                                                          vertical: 5),
-                                                      decoration: BoxDecoration(
-                                                        color: const Color(
-                                                                0xFFFF5722)
-                                                            .withValues(
-                                                                alpha: 0.12),
+                                          // Bottom Row: Action buttons based on Role (No overflow guaranteed)
+                                          Row(
+                                            children: [
+                                              if (_isAdmin) ...[
+                                                // Admin Controls: Diskon, Edit & Delete
+                                                Expanded(
+                                                  child: Wrap(
+                                                    spacing: 6,
+                                                    runSpacing: 6,
+                                                    crossAxisAlignment:
+                                                        WrapCrossAlignment
+                                                            .center,
+                                                    children: [
+                                                      InkWell(
+                                                        onTap: () {
+                                                          HapticFeedback
+                                                              .lightImpact();
+                                                          _showSetDiscountDialog(
+                                                              product);
+                                                        },
                                                         borderRadius:
                                                             BorderRadius
                                                                 .circular(8),
-                                                        border: Border.all(
+                                                        child: Container(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .symmetric(
+                                                                  horizontal: 9,
+                                                                  vertical: 5),
+                                                          decoration:
+                                                              BoxDecoration(
                                                             color: const Color(
                                                                     0xFFFF5722)
                                                                 .withValues(
                                                                     alpha:
-                                                                        0.35)),
-                                                      ),
-                                                      child: Row(
-                                                        mainAxisSize:
-                                                            MainAxisSize.min,
-                                                        children: [
-                                                          const Icon(
-                                                              Icons
-                                                                  .percent_rounded,
-                                                              color: Color(
-                                                                  0xFFFF5722),
-                                                              size: 13),
-                                                          const SizedBox(
-                                                              width: 3),
-                                                          Text(
-                                                            LanguageService
-                                                                .text('Diskon',
-                                                                    'Discount'),
-                                                            style: GoogleFonts
-                                                                .poppins(
-                                                              color: const Color(
-                                                                  0xFFFF5722),
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .bold,
-                                                              fontSize: 10.5,
-                                                            ),
+                                                                        0.12),
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(
+                                                                        8),
+                                                            border: Border.all(
+                                                                color: const Color(
+                                                                        0xFFFF5722)
+                                                                    .withValues(
+                                                                        alpha:
+                                                                            0.35)),
                                                           ),
-                                                        ],
+                                                          child: Row(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              const Icon(
+                                                                  Icons
+                                                                      .percent_rounded,
+                                                                  color: Color(
+                                                                      0xFFFF5722),
+                                                                  size: 13),
+                                                              const SizedBox(
+                                                                  width: 3),
+                                                              Text(
+                                                                LanguageService.text(
+                                                                    'Diskon',
+                                                                    'Discount'),
+                                                                style:
+                                                                    GoogleFonts
+                                                                        .poppins(
+                                                                  color: const Color(
+                                                                      0xFFFF5722),
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .bold,
+                                                                  fontSize:
+                                                                      10.5,
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
                                                       ),
-                                                    ),
-                                                  ),
-                                                  InkWell(
-                                                    onTap: () {
-                                                      HapticFeedback
-                                                          .lightImpact();
-                                                      _showAdminProductForm(
-                                                        product: product,
-                                                        category:
-                                                            productCategory,
-                                                      );
-                                                    },
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                            8),
-                                                    child: Container(
-                                                      padding: const EdgeInsets
-                                                          .symmetric(
-                                                          horizontal: 9,
-                                                          vertical: 5),
-                                                      decoration: BoxDecoration(
-                                                        color: AppColors.cyan
-                                                            .withValues(
-                                                                alpha: 0.12),
+                                                      InkWell(
+                                                        onTap: () {
+                                                          HapticFeedback
+                                                              .lightImpact();
+                                                          _showAdminProductForm(
+                                                            product: product,
+                                                            category:
+                                                                productCategory,
+                                                          );
+                                                        },
                                                         borderRadius:
                                                             BorderRadius
                                                                 .circular(8),
-                                                        border: Border.all(
+                                                        child: Container(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .symmetric(
+                                                                  horizontal: 9,
+                                                                  vertical: 5),
+                                                          decoration:
+                                                              BoxDecoration(
                                                             color: AppColors
                                                                 .cyan
                                                                 .withValues(
                                                                     alpha:
-                                                                        0.3)),
-                                                      ),
-                                                      child: Row(
-                                                        mainAxisSize:
-                                                            MainAxisSize.min,
-                                                        children: [
-                                                          const Icon(
-                                                              Icons
-                                                                  .edit_rounded,
-                                                              color: AppColors
-                                                                  .cyan,
-                                                              size: 13),
-                                                          const SizedBox(
-                                                              width: 3),
-                                                          Text(
-                                                            LanguageService
-                                                                .text('Edit',
-                                                                    'Edit'),
-                                                            style: GoogleFonts
-                                                                .poppins(
-                                                              color: AppColors
-                                                                  .cyan,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .bold,
-                                                              fontSize: 10.5,
-                                                            ),
+                                                                        0.12),
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(
+                                                                        8),
+                                                            border: Border.all(
+                                                                color: AppColors
+                                                                    .cyan
+                                                                    .withValues(
+                                                                        alpha:
+                                                                            0.3)),
                                                           ),
-                                                        ],
+                                                          child: Row(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              const Icon(
+                                                                  Icons
+                                                                      .edit_rounded,
+                                                                  color:
+                                                                      AppColors
+                                                                          .cyan,
+                                                                  size: 13),
+                                                              const SizedBox(
+                                                                  width: 3),
+                                                              Text(
+                                                                LanguageService
+                                                                    .text(
+                                                                        'Edit',
+                                                                        'Edit'),
+                                                                style:
+                                                                    GoogleFonts
+                                                                        .poppins(
+                                                                  color:
+                                                                      AppColors
+                                                                          .cyan,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .bold,
+                                                                  fontSize:
+                                                                      10.5,
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
                                                       ),
-                                                    ),
-                                                  ),
-                                                  InkWell(
-                                                    onTap: () {
-                                                      HapticFeedback
-                                                          .lightImpact();
-                                                      _showDeleteProductDialog(
-                                                        product['id'] as int,
-                                                        product['nama']
-                                                                ?.toString() ??
-                                                            '',
-                                                      );
-                                                    },
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                            8),
-                                                    child: Container(
-                                                      padding: const EdgeInsets
-                                                          .symmetric(
-                                                          horizontal: 9,
-                                                          vertical: 5),
-                                                      decoration: BoxDecoration(
-                                                        color: AppColors.error
-                                                            .withValues(
-                                                                alpha: 0.12),
+                                                      InkWell(
+                                                        onTap: () {
+                                                          HapticFeedback
+                                                              .lightImpact();
+                                                          _showDeleteProductDialog(
+                                                            product['id']
+                                                                as int,
+                                                            product['nama']
+                                                                    ?.toString() ??
+                                                                '',
+                                                          );
+                                                        },
                                                         borderRadius:
                                                             BorderRadius
                                                                 .circular(8),
-                                                        border: Border.all(
+                                                        child: Container(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .symmetric(
+                                                                  horizontal: 9,
+                                                                  vertical: 5),
+                                                          decoration:
+                                                              BoxDecoration(
                                                             color: AppColors
                                                                 .error
                                                                 .withValues(
                                                                     alpha:
-                                                                        0.3)),
-                                                      ),
-                                                      child: Row(
-                                                        mainAxisSize:
-                                                            MainAxisSize.min,
-                                                        children: [
-                                                          const Icon(
-                                                              Icons
-                                                                  .delete_outline_rounded,
-                                                              color: AppColors
-                                                                  .error,
-                                                              size: 13),
-                                                          const SizedBox(
-                                                              width: 3),
-                                                          Text(
-                                                            LanguageService.tr(
-                                                                'hapus'),
-                                                            style: GoogleFonts
-                                                                .poppins(
-                                                              color: AppColors
-                                                                  .error,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .bold,
-                                                              fontSize: 10.5,
-                                                            ),
+                                                                        0.12),
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(
+                                                                        8),
+                                                            border: Border.all(
+                                                                color: AppColors
+                                                                    .error
+                                                                    .withValues(
+                                                                        alpha:
+                                                                            0.3)),
                                                           ),
-                                                        ],
+                                                          child: Row(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              const Icon(
+                                                                  Icons
+                                                                      .delete_outline_rounded,
+                                                                  color:
+                                                                      AppColors
+                                                                          .error,
+                                                                  size: 13),
+                                                              const SizedBox(
+                                                                  width: 3),
+                                                              Text(
+                                                                LanguageService
+                                                                    .tr('hapus'),
+                                                                style:
+                                                                    GoogleFonts
+                                                                        .poppins(
+                                                                  color:
+                                                                      AppColors
+                                                                          .error,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .bold,
+                                                                  fontSize:
+                                                                      10.5,
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
                                                       ),
-                                                    ),
+                                                    ],
                                                   ),
-                                                ],
-                                              ),
-                                            ),
-                                          ] else ...[
-                                            Expanded(
-                                              child: Row(
-                                                children: [
-                                                  const Icon(
-                                                      Icons
-                                                          .verified_user_outlined,
-                                                      color: AppColors.success,
-                                                      size: 14),
-                                                  const SizedBox(width: 4),
-                                                  Flexible(
-                                                    child: Text(
-                                                      hasDiscount
-                                                          ? LanguageService.text(
-                                                              'Harga Spesial Promo',
-                                                              'Special Promo Price')
-                                                          : LanguageService.text(
-                                                              'Garansi Aktif 24/7',
-                                                              '24/7 Active Warranty'),
-                                                      overflow:
-                                                          TextOverflow.ellipsis,
-                                                      style:
-                                                          GoogleFonts.poppins(
-                                                        color: hasDiscount
-                                                            ? const Color(
-                                                                0xFFFF5722)
-                                                            : _textSecondary,
-                                                        fontSize: 11,
-                                                        fontWeight: hasDiscount
-                                                            ? FontWeight.bold
-                                                            : FontWeight.normal,
+                                                ),
+                                              ] else ...[
+                                                Expanded(
+                                                  child: Row(
+                                                    children: [
+                                                      const Icon(
+                                                          Icons
+                                                              .verified_user_outlined,
+                                                          color:
+                                                              AppColors.success,
+                                                          size: 14),
+                                                      const SizedBox(width: 4),
+                                                      Flexible(
+                                                        child: Text(
+                                                          hasDiscount
+                                                              ? LanguageService.text(
+                                                                  'Harga Spesial Promo',
+                                                                  'Special Promo Price')
+                                                              : LanguageService.text(
+                                                                  'Garansi Aktif 24/7',
+                                                                  '24/7 Active Warranty'),
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                          style: GoogleFonts
+                                                              .poppins(
+                                                            color: hasDiscount
+                                                                ? const Color(
+                                                                    0xFFFF5722)
+                                                                : _textSecondary,
+                                                            fontSize: 11,
+                                                            fontWeight:
+                                                                hasDiscount
+                                                                    ? FontWeight
+                                                                        .bold
+                                                                    : FontWeight
+                                                                        .normal,
+                                                          ),
+                                                        ),
                                                       ),
-                                                    ),
+                                                    ],
                                                   ),
-                                                ],
-                                              ),
-                                            ),
-                                          ],
+                                                ),
+                                              ],
 
-                                          const SizedBox(width: 8),
+                                              const SizedBox(width: 8),
 
-                                          // Pesan Button
-                                          BounceTap(
-                                            onTap: () {
-                                              HapticFeedback.selectionClick();
-                                              _showOrderDialog(
-                                                  product,
-                                                  productCategory,
-                                                  _cardColor,
-                                                  _textPrimary,
-                                                  _textSecondary);
-                                            },
-                                            child: Container(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
+                                              // Pesan Button
+                                              BounceTap(
+                                                onTap: () {
+                                                  HapticFeedback
+                                                      .selectionClick();
+                                                  _showOrderDialog(
+                                                      product,
+                                                      productCategory,
+                                                      _cardColor,
+                                                      _textPrimary,
+                                                      _textSecondary);
+                                                },
+                                                child: Container(
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
                                                       horizontal: 16,
                                                       vertical: 8),
-                                              decoration: BoxDecoration(
-                                                color: AppColors.primary,
-                                                borderRadius:
-                                                    BorderRadius.circular(12),
-                                              ),
-                                              child: Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  const Icon(
-                                                      Icons
-                                                          .shopping_bag_outlined,
-                                                      color: Colors.white,
-                                                      size: 14),
-                                                  const SizedBox(width: 6),
-                                                  Text(
-                                                    LanguageService.text(
-                                                        'Pesan', 'Order'),
-                                                    style: GoogleFonts.poppins(
-                                                      color: Colors.white,
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                      fontSize: 12,
-                                                    ),
+                                                  decoration: BoxDecoration(
+                                                    color: AppColors.primary,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            12),
                                                   ),
-                                                ],
+                                                  child: Row(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      const Icon(
+                                                          Icons
+                                                              .shopping_bag_outlined,
+                                                          color: Colors.white,
+                                                          size: 14),
+                                                      const SizedBox(width: 6),
+                                                      Text(
+                                                        LanguageService.text(
+                                                            'Pesan', 'Order'),
+                                                        style:
+                                                            GoogleFonts.poppins(
+                                                          color: Colors.white,
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                          fontSize: 12,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
                                               ),
-                                            ),
+                                            ],
                                           ),
                                         ],
                                       ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
+                                    );
+                              },
+                            ),
+                    ),
                   ),
                 ],
               );

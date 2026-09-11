@@ -1,9 +1,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:vibetech_xyz/database/db_helper.dart';
 import 'package:vibetech_xyz/services/balance_service.dart';
 import 'package:vibetech_xyz/services/firebase_email_service.dart';
 import 'package:vibetech_xyz/services/firebase_product_service.dart';
+import 'package:vibetech_xyz/services/firebase_realtime_listener_service.dart';
 import 'package:vibetech_xyz/services/firebase_transaction_service.dart';
 import 'package:vibetech_xyz/services/firebase_user_service.dart';
 
@@ -21,13 +21,14 @@ class CloudSyncService {
   bool _isSyncing = false;
   bool get isSyncing => _isSyncing;
 
-  /// Sinkronisasi penuh satu pintu dari Firebase Cloud ke SQLite Lokal
-  Future<void> syncAllFromCloud({bool isInitial = false}) async {
+  /// Sinkronisasi cepat satu pintu dari Firebase Cloud ke SQLite Lokal
+  Future<void> syncAllFromCloud({bool isInitial = false, bool runHeavyCleanup = false}) async {
     if (_isSyncing) return;
     _isSyncing = true;
 
     try {
-      debugPrint('[CloudSyncService] 🔄 Memulai sinkronisasi penuh dari Firebase Cloud...');
+      debugPrint(
+          '[CloudSyncService] 🔄 Memulai sinkronisasi cepat dari Firebase Cloud...');
 
       // 1. Jalankan sinkronisasi seluruh domain database dari Cloud ke SQLite lokal
       await Future.wait([
@@ -38,28 +39,32 @@ class CloudSyncService {
         FirebaseEmailService.instance.syncEmailSettings(),
       ]).timeout(const Duration(seconds: 6), onTimeout: () => []);
 
-      // 2. Bersihkan akun dummy lokal (demouser) agar tidak membedakan data di PC baru
-      try {
-        final db = await DatabaseHelper.instance.database;
-        final realUsers = await db.rawQuery(
-          "SELECT COUNT(*) as count FROM users WHERE email != 'user@vibetech.com' AND username != 'demouser'",
-        );
-        final realCount = (realUsers.first['count'] as num?)?.toInt() ?? 0;
-        if (realCount > 0) {
-          await db.delete('users', where: "email = 'user@vibetech.com' OR username = 'demouser'");
-        }
-      } catch (_) {}
-
-      // 3. Sinkronkan saldo akun yang sedang aktif di runtime
+      // 2. Sinkronkan saldo akun yang sedang aktif di runtime
       try {
         final prefs = await SharedPreferences.getInstance();
-        final currentEmail = prefs.getString('email') ?? prefs.getString('username');
+        final currentEmail =
+            prefs.getString('email') ?? prefs.getString('username');
         if (currentEmail != null && currentEmail.isNotEmpty) {
           await BalanceService.loadUserBalance(currentEmail);
         }
       } catch (_) {}
 
-      debugPrint('[CloudSyncService] ✅ Sinkronisasi penuh dari Firebase Cloud berhasil diselesaikan!');
+      // 3. Hanya jalankan pembersihan berat jika diminta secara eksplisit
+      if (runHeavyCleanup) {
+        try {
+          await FirebaseUserService.instance
+              .cleanupDummyUsersFromFirebaseAndLocal();
+          await FirebaseUserService.instance
+              .cleanupDuplicateSpamUsersFromFirebase();
+          await FirebaseTransactionService.instance
+              .cleanupDummyTransactionsFromFirebase();
+          await FirebaseProductService.instance
+              .cleanupDummyAndRandomProductsFromFirebaseAndLocal();
+        } catch (_) {}
+      }
+
+      debugPrint(
+          '[CloudSyncService] ✅ Sinkronisasi cepat dari Firebase Cloud selesai!');
     } catch (e) {
       debugPrint('[CloudSyncService] Info sinkronisasi cloud: $e');
     } finally {
@@ -67,16 +72,45 @@ class CloudSyncService {
     }
   }
 
+  /// Domain notifiers yang dapat dipantau oleh antarmuka UI secara reaktif
+  ValueNotifier<int> get productsNotifier =>
+      FirebaseRealtimeListenerService.instance.productsUpdateCount;
+  ValueNotifier<int> get usersNotifier =>
+      FirebaseRealtimeListenerService.instance.usersUpdateCount;
+  ValueNotifier<int> get transactionsNotifier =>
+      FirebaseRealtimeListenerService.instance.transactionsUpdateCount;
+  ValueNotifier<int> get servicesNotifier =>
+      FirebaseRealtimeListenerService.instance.servicesUpdateCount;
+
+  /// Memulai sinkronisasi awal dan mengaktifkan continuous real-time streaming listener secara non-blocking
+  Future<void> startRealtimeSync() async {
+    // Jalankan non-blocking agar frame pertama UI aplikasi langsung terbuka mulus tanpa lag
+    Future.delayed(const Duration(milliseconds: 600), () async {
+      await syncAllFromCloud();
+      await FirebaseRealtimeListenerService.instance.startAllListeners();
+    });
+  }
+
+  /// Menghentikan real-time stream listener
+  void stopRealtimeSync() {
+    FirebaseRealtimeListenerService.instance.stopAllListeners();
+  }
+
   /// Sinkronisasi cadangan dari SQLite Lokal ke Firebase Cloud
   Future<void> syncAllToCloud() async {
     try {
+      debugPrint(
+          '[CloudSyncService] 📤 Mengunggah seluruh database nyata (Akun, Produk, Transaksi, Layanan, SMTP) ke Firebase...');
       await Future.wait([
         FirebaseUserService.instance.syncAllLocalUsersToFirebase(),
-        FirebaseTransactionService.instance.syncAllLocalTransactionsToFirestore(),
+        FirebaseTransactionService.instance
+            .syncAllLocalTransactionsToFirestore(),
         FirebaseProductService.instance.syncAllLocalProductsToFirebase(),
         FirebaseTransactionService.instance.syncAllLocalServicesToFirebase(),
         FirebaseEmailService.instance.syncEmailSettings(),
-      ]).timeout(const Duration(seconds: 6), onTimeout: () => []);
+      ]).timeout(const Duration(seconds: 8), onTimeout: () => []);
+      debugPrint(
+          '[CloudSyncService] ✅ Berhasil mengunggah seluruh database nyata ke Firebase Cloud!');
     } catch (e) {
       debugPrint('[CloudSyncService] Info push ke cloud: $e');
     }

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -14,6 +15,7 @@ import 'package:vibetech_xyz/services/github_auth_service.dart';
 import 'package:vibetech_xyz/services/google_auth_service.dart';
 import 'package:vibetech_xyz/services/language_service.dart';
 import 'package:vibetech_xyz/services/theme_service.dart';
+import 'package:vibetech_xyz/utils/security_helper.dart';
 
 import 'lupa_password_page.dart';
 import 'register_page.dart';
@@ -41,14 +43,13 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
 
   bool _obscurePassword = true;
   bool _isLoading = false;
+  bool _agreeTerms = true;
   bool _isDarkMode = true;
   int _localUsersCount = 0;
 
   // Animation Controllers
   late AnimationController _mainAnimationController;
   late AnimationController _pulseController;
-  late AnimationController _ringController;
-  late AnimationController _particleController;
 
   // Staggered Animations
   late Animation<double> _fadeAnimation;
@@ -66,10 +67,6 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
   // Login Portal Mode: 0 = Member, 1 = Admin
   int _selectedLoginRoleIndex = 0;
 
-  // Floating particles
-  final List<AppParticle> _particles = [];
-  final math.Random _random = math.Random();
-
   @override
   void initState() {
     super.initState();
@@ -79,17 +76,6 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
 
     _emailFocus.addListener(() => setState(() {}));
     _passwordFocus.addListener(() => setState(() {}));
-
-    // Inisialisasi Partikel Cyber
-    _particles.addAll(AppParticle.generateList(_random, count: 22));
-
-    _particleController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 10),
-    )..repeat();
-    _particleController.addListener(() {
-      AppParticle.updatePositions(_particles);
-    });
 
     _mainAnimationController = AnimationController(
       vsync: this,
@@ -136,11 +122,6 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOutSine),
     );
 
-    _ringController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 14),
-    )..repeat();
-
     _mainAnimationController.forward();
     CloudSyncService.instance.syncAllFromCloud();
   }
@@ -162,8 +143,6 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
     _passwordFocus.dispose();
     _mainAnimationController.dispose();
     _pulseController.dispose();
-    _ringController.dispose();
-    _particleController.dispose();
     super.dispose();
   }
 
@@ -232,6 +211,14 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
       return;
     }
 
+    if (!_agreeTerms) {
+      _showErrorSnackBar(LanguageService.text(
+        'Harap centang dan setujui Kebijakan Privasi untuk masuk!',
+        'Please agree to the Privacy Policy to proceed with login!',
+      ));
+      return;
+    }
+
     HapticFeedback.mediumImpact();
     setState(() => _isLoading = true);
 
@@ -243,35 +230,39 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
       if (user == null) {
         try {
           final cloudUser = await FirebaseUserService.instance
-              .getUserFromFirebase(identifier);
-          if (cloudUser != null &&
-              (cloudUser['password'] == password ||
-                  cloudUser['password'] == 'password123' ||
-                  cloudUser['password'] == 'password123456')) {
-            final registeredUser = {
-              'uid': cloudUser['uid'] ??
-                  'usr_${DateTime.now().millisecondsSinceEpoch}',
-              'nama': cloudUser['nama'] ?? identifier,
-              'username': cloudUser['username'] ?? identifier.split('@').first,
-              'email': cloudUser['email'] ?? identifier,
-              'phone': cloudUser['phone'] ?? '',
-              'password': password,
-              'pin': cloudUser['pin'] ?? '123456',
-              'referralCode': cloudUser['referralCode'] ?? '',
-              'role': cloudUser['role'] ?? 'user',
-              'createdAt':
-                  cloudUser['createdAt'] ?? DateTime.now().toIso8601String(),
-              'saldo': (cloudUser['saldo'] as num?)?.toDouble() ?? 0.0,
-              'location': cloudUser['location'] ?? 'Indonesia',
-              'avatarUrl': cloudUser['avatarUrl'] ??
-                  'https://cdn.nekohime.site/file/5232n74c.jpeg',
-              'is2FA': (cloudUser['is2FA'] as num?)?.toInt() ?? 1,
-              'language': cloudUser['language'] ?? 'Indonesia',
-              'authProvider': cloudUser['authProvider'] ?? 'Email',
-              'bio': cloudUser['bio'] ?? '',
-            };
-            await DatabaseHelper.instance.registerUser(registeredUser);
-            user = registeredUser;
+              .getUserFromFirebase(identifier)
+              .timeout(const Duration(seconds: 5), onTimeout: () => null);
+          if (cloudUser != null) {
+            final storedPassword = cloudUser['password']?.toString() ?? '';
+            if (SecurityHelper.verifyPassword(password, storedPassword)) {
+              final registeredUser = {
+                'uid': cloudUser['uid'] ??
+                    'usr_${DateTime.now().millisecondsSinceEpoch}',
+                'nama': cloudUser['nama'] ?? identifier,
+                'username':
+                    cloudUser['username'] ?? identifier.split('@').first,
+                'email': cloudUser['email'] ?? identifier,
+                'phone': cloudUser['phone'] ?? '',
+                'password': SecurityHelper.hashPassword(password),
+                'pin': cloudUser['pin'] != null
+                    ? SecurityHelper.hashPin(cloudUser['pin'].toString())
+                    : SecurityHelper.hashPin('123456'),
+                'referralCode': cloudUser['referralCode'] ?? '',
+                'role': cloudUser['role'] ?? 'user',
+                'createdAt':
+                    cloudUser['createdAt'] ?? DateTime.now().toIso8601String(),
+                'saldo': (cloudUser['saldo'] as num?)?.toDouble() ?? 0.0,
+                'location': cloudUser['location'] ?? 'Indonesia',
+                'avatarUrl': cloudUser['avatarUrl'] ??
+                    'https://cdn.nekohime.site/file/5232n74c.jpeg',
+                'is2FA': (cloudUser['is2FA'] as num?)?.toInt() ?? 1,
+                'language': cloudUser['language'] ?? 'Indonesia',
+                'authProvider': cloudUser['authProvider'] ?? 'Email',
+                'bio': cloudUser['bio'] ?? '',
+              };
+              await DatabaseHelper.instance.registerUser(registeredUser);
+              user = registeredUser;
+            }
           }
         } catch (_) {}
       }
@@ -310,12 +301,6 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
         }
         BalanceService.loadUserBalance(userEmail);
 
-        // Sinkronisasi data akun ke Cloud Firebase Realtime Database di latar belakang (non-blocking)
-        FirebaseUserService.instance.saveUserToFirebase(user).catchError((e) {
-          debugPrint('[LoginPage] Email login cloud sync info: $e');
-          return null;
-        });
-
         _tambahLoginHistory(userEmail, provider: 'Email');
 
         if (mounted) setState(() => _isLoading = false);
@@ -343,9 +328,16 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
   Future<void> _loginWithGoogle() async {
     HapticFeedback.lightImpact();
 
-    // 1. Tampilkan dialog pemilihan akun Google
-    final GoogleAccountUser? selectedAccount =
-        await GoogleAuthService.pickAndSignIn(
+    if (!_agreeTerms) {
+      _showErrorSnackBar(LanguageService.text(
+        'Harap centang dan setujui Kebijakan Privasi untuk masuk!',
+        'Please agree to the Privacy Policy to proceed with login!',
+      ));
+      return;
+    }
+
+    // 1. Langsung buka login Google resmi
+    final GoogleAccountUser? selectedAccount = await GoogleAuthService.signIn(
       context: context,
       isDarkMode: _isDarkMode,
       isRegisterMode: false,
@@ -360,6 +352,18 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
 
       Map<String, dynamic>? user =
           await DatabaseHelper.instance.getUserByEmail(googleEmail);
+      if (user == null) {
+        // Coba periksa & sinkronkan dari Cloud Firebase jika akun sudah ada di cloud
+        try {
+          final cloudUser = await FirebaseUserService.instance
+              .getUserFromFirebase(googleEmail);
+          if (cloudUser != null) {
+            await DatabaseHelper.instance.registerUser(cloudUser);
+            user = cloudUser;
+          }
+        } catch (_) {}
+      }
+
       if (user == null) {
         final String uid = 'goog_${DateTime.now().millisecondsSinceEpoch}';
         final String username = googleEmail.contains('@')
@@ -379,21 +383,29 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
           'createdAt': DateTime.now().toIso8601String(),
           'saldo': 0.0,
           'avatarUrl': selectedAccount.avatarUrl ?? '',
+          'authProvider': 'Google',
         };
         await DatabaseHelper.instance.registerUser(newUser);
         user = newUser;
+      } else {
+        // Sinkronkan profil Google terbaru ke Firebase Realtime Database
+        final syncData = Map<String, dynamic>.from(user);
+        if (selectedAccount.avatarUrl != null &&
+            selectedAccount.avatarUrl!.isNotEmpty) {
+          syncData['avatarUrl'] = selectedAccount.avatarUrl;
+        }
+        syncData['authProvider'] = 'Google';
+        FirebaseUserService.instance
+            .saveUserToFirebase(syncData)
+            .catchError((_) => null);
       }
-
-      // Sinkronisasi Firebase di latar belakang
-      FirebaseUserService.instance.saveUserToFirebase(user).catchError((e) {
-        debugPrint('[LoginPage] Google login cloud sync info: $e');
-        return null;
-      });
 
       final String userUid = user['uid']?.toString() ?? '';
       final String displayName = user['nama'] ?? user['username'] ?? googleName;
       final String userAvatar =
           user['avatarUrl']?.toString() ?? selectedAccount.avatarUrl ?? '';
+
+      final String userRole = (user['role'] ?? 'user').toString().toLowerCase();
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('isLogin', true);
@@ -402,6 +414,7 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
       }
       await prefs.setString('username', displayName);
       await prefs.setString('email', googleEmail);
+      await prefs.setString('role', userRole);
       if (userAvatar.isNotEmpty) {
         await prefs.setString('avatarUrl', userAvatar);
       }
@@ -433,10 +446,16 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             margin: const EdgeInsets.all(16),
+            duration: const Duration(milliseconds: 2000),
           ),
         );
       }
-      _navigateToDashboard(displayName);
+
+      // Berikan jeda waktu agar pengguna dapat melihat snackbar berhasil sebelum berpindah halaman
+      await Future.delayed(const Duration(milliseconds: 800));
+      if (mounted) {
+        _navigateToDashboard(displayName);
+      }
     } catch (e) {
       if (mounted) setState(() => _isLoading = false);
       _showErrorSnackBar('Gagal login via Google: $e');
@@ -446,10 +465,18 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
   Future<void> _loginWithGithub() async {
     HapticFeedback.lightImpact();
 
-    // 1. Tampilkan modal dialog pemilihan akun GitHub
+    if (!_agreeTerms) {
+      _showErrorSnackBar(LanguageService.text(
+        'Harap centang dan setujui Kebijakan Privasi untuk masuk!',
+        'Please agree to the Privacy Policy to proceed with login!',
+      ));
+      return;
+    }
+
+    // 1. Langsung buka halaman otorisasi GitHub OAuth resmi
     final GithubAccountUser? selectedAccount =
-        await GithubAuthService.pickAndSignIn(
-      context: context,
+        await GithubAuthService.signInWithOAuthWebView(
+      context,
       isDarkMode: _isDarkMode,
       isRegisterMode: false,
     );
@@ -509,18 +536,19 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
         }
       }
 
-      // Sinkronisasi penuh ke Firebase Authentication, RTDB & Firestore di latar belakang
+      // Pastikan data tersimpan dan tersinkronisasi ke Firebase Authentication, RTDB & Firestore
+      final syncData = Map<String, dynamic>.from(user);
+      syncData['uid'] = uid;
+      syncData['avatarUrl'] = userAvatar;
+      syncData['authProvider'] = 'GitHub';
       FirebaseUserService.instance
-          .saveUserToFirebase({
-            ...user,
-            'avatarUrl': userAvatar,
-            'authProvider': 'GitHub',
-          })
-          .timeout(const Duration(seconds: 4))
+          .saveUserToFirebase(syncData)
           .catchError((_) => null);
 
       final String userUid = user['uid']?.toString() ?? '';
       final String displayName = user['nama'] ?? user['username'] ?? githubName;
+
+      final String userRole = (user['role'] ?? 'user').toString().toLowerCase();
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('isLogin', true);
@@ -529,6 +557,7 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
       }
       await prefs.setString('username', displayName);
       await prefs.setString('email', githubEmail);
+      await prefs.setString('role', userRole);
       await prefs.setString('avatarUrl', userAvatar);
       BalanceService.loadUserBalance(githubEmail);
 
@@ -621,17 +650,8 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
           // 2. Ambient Neon Glow Orbs
           if (_isDarkMode) AppNeonOrbs(pulseAnimation: _pulseController),
 
-          // 3. Floating Cyber Particle Canvas
-          if (_isDarkMode)
-            AnimatedBuilder(
-              animation: _particleController,
-              builder: (context, child) {
-                return CustomPaint(
-                  size: MediaQuery.of(context).size,
-                  painter: AppParticlePainter(_particles),
-                );
-              },
-            ),
+          // 3. Floating Cyber Particle Canvas (Animated & GPU-isolated)
+          if (_isDarkMode) const CyberParticlesLayer(count: 22),
 
           // 4. Main Scrollable Content
           SafeArea(
@@ -731,14 +751,11 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
           child: Stack(
             alignment: Alignment.center,
             children: [
-              RotationTransition(
-                turns: _ringController,
-                child: CustomPaint(
-                  size: const Size(95, 95),
-                  painter: _MiniCyberRingPainter(
-                    color: const Color(0xFF00E5FF),
-                    secondaryColor: const Color(0xFF7C4DFF),
-                  ),
+              CustomPaint(
+                size: const Size(95, 95),
+                painter: _MiniCyberRingPainter(
+                  color: const Color(0xFF00E5FF),
+                  secondaryColor: const Color(0xFF7C4DFF),
                 ),
               ),
               AnimatedBuilder(
@@ -950,6 +967,7 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
               children: [
                 Expanded(
                   child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
                     onTap: () {
                       HapticFeedback.selectionClick();
                       setState(() {
@@ -1015,12 +1033,14 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
                 ),
                 Expanded(
                   child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
                     onTap: () {
                       HapticFeedback.selectionClick();
                       setState(() {
                         _selectedLoginRoleIndex = 1;
-                        _emailController.clear();
-                        _passwordController.clear();
+                        _emailController.text = '';
+                        _passwordController.text = '';
+                        _agreeTerms = true;
                       });
                     },
                     child: AnimatedContainer(
@@ -1226,13 +1246,21 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
           else
             const SizedBox(height: 6),
 
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
+
+          // Checkbox Persetujuan Kebijakan Privasi
+          _buildAgreementCheckbox(secondaryText),
+
+          const SizedBox(height: 16),
 
           GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              if (!_isLoading) _login();
+            },
             onTapDown: (_) => setState(() => _isLoginPressed = true),
             onTapUp: (_) {
               setState(() => _isLoginPressed = false);
-              if (!_isLoading) _login();
             },
             onTapCancel: () => setState(() => _isLoginPressed = false),
             child: AnimatedScale(
@@ -1781,6 +1809,632 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  // --- CHECKBOX PERSETUJUAN KEBIJAKAN PRIVASI ---
+
+  Widget _buildAgreementCheckbox(Color secondaryText) {
+    final bool isDark = _isDarkMode;
+    const Color accentCyan = Color(0xFF00E5FF);
+    const Color accentPurple = Color(0xFF7C4DFF);
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: () {
+        HapticFeedback.selectionClick();
+        if (!_agreeTerms) {
+          _showPrivacyPolicyModal(context);
+        } else {
+          setState(() => _agreeTerms = false);
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: _agreeTerms
+              ? (isDark
+                  ? accentPurple.withValues(alpha: 0.12)
+                  : const Color(0xFFF3E8FF))
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: _agreeTerms
+                ? (isDark
+                    ? accentPurple.withValues(alpha: 0.45)
+                    : const Color(0xFF7C4DFF))
+                : (isDark
+                    ? Colors.white.withValues(alpha: 0.08)
+                    : Colors.black.withValues(alpha: 0.08)),
+            width: 1,
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            SizedBox(
+              height: 22,
+              width: 22,
+              child: Checkbox(
+                value: _agreeTerms,
+                onChanged: (value) {
+                  HapticFeedback.selectionClick();
+                  if (value == true) {
+                    _showPrivacyPolicyModal(context);
+                  } else {
+                    setState(() => _agreeTerms = false);
+                  }
+                },
+                activeColor: accentPurple,
+                checkColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                side: BorderSide(
+                  color: isDark
+                      ? accentPurple.withValues(alpha: 0.7)
+                      : const Color(0xFF94A3B8),
+                  width: 1.5,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: RichText(
+                text: TextSpan(
+                  style: GoogleFonts.poppins(
+                    color: secondaryText,
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
+                  children: [
+                    TextSpan(
+                      text: LanguageService.text(
+                        'Saya telah membaca dan menyetujui ',
+                        'I have read and agree to ',
+                      ),
+                    ),
+                    TextSpan(
+                      text: LanguageService.text(
+                        'Kebijakan Privasi',
+                        'Privacy Policy',
+                      ),
+                      style: TextStyle(
+                        color: isDark ? accentCyan : accentPurple,
+                        fontWeight: FontWeight.bold,
+                        decoration: TextDecoration.underline,
+                        decorationColor: (isDark ? accentCyan : accentPurple)
+                            .withValues(alpha: 0.7),
+                      ),
+                      recognizer: TapGestureRecognizer()
+                        ..onTap = () {
+                          HapticFeedback.lightImpact();
+                          _showPrivacyPolicyModal(context);
+                        },
+                    ),
+                    TextSpan(
+                      text: LanguageService.text(
+                        ' VibeTech XYZ (UU PDP No. 27/2022).',
+                        ' of VibeTech XYZ (PDP Law No. 27/2022).',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showPrivacyPolicyModal(BuildContext context) {
+    final bool isDark = _isDarkMode;
+    final Color bgCard = isDark ? const Color(0xFF0F1426) : Colors.white;
+    final Color textTitle = isDark ? Colors.white : const Color(0xFF0F172A);
+    final Color textDesc =
+        isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569);
+    const Color cyanAccent = Color(0xFF00E5FF);
+    const Color purpleAccent = Color(0xFF7C4DFF);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.7),
+      builder: (ctx) {
+        return Container(
+          height: MediaQuery.of(context).size.height * 0.88,
+          decoration: BoxDecoration(
+            color: bgCard,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            border: Border.all(
+              color: cyanAccent.withValues(alpha: isDark ? 0.35 : 0.2),
+              width: 1.5,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: cyanAccent.withValues(alpha: 0.15),
+                blurRadius: 30,
+                spreadRadius: 2,
+                offset: const Offset(0, -4),
+              ),
+            ],
+          ),
+          child: Column(
+            children: [
+              // Drag Indicator Bar
+              const SizedBox(height: 12),
+              Center(
+                child: Container(
+                  width: 44,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.25)
+                        : Colors.black.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+
+              // Modal Header
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            cyanAccent.withValues(alpha: 0.2),
+                            purpleAccent.withValues(alpha: 0.2),
+                          ],
+                        ),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: cyanAccent.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.privacy_tip_rounded,
+                        color: cyanAccent,
+                        size: 24,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  LanguageService.text(
+                                    'Kebijakan Privasi',
+                                    'Privacy Policy',
+                                  ),
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                    color: textTitle,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 7, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF10B981)
+                                      .withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: const Color(0xFF10B981)
+                                        .withValues(alpha: 0.4),
+                                  ),
+                                ),
+                                child: Text(
+                                  'v2.0',
+                                  style: GoogleFonts.spaceMono(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.bold,
+                                    color: const Color(0xFF10B981),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          Text(
+                            LanguageService.text(
+                              'VibeTech XYZ Cloud & Server Ecosystem',
+                              'VibeTech XYZ Cloud & Server Ecosystem',
+                            ),
+                            style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              color: textDesc,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        Icons.close_rounded,
+                        color: textDesc,
+                        size: 22,
+                      ),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              Divider(
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.08)
+                    : Colors.black.withValues(alpha: 0.06),
+                thickness: 1,
+              ),
+
+              // Scrollable Policy Content
+              Expanded(
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Banner UU PDP
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF10B981).withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color:
+                                const Color(0xFF10B981).withValues(alpha: 0.3),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.verified_rounded,
+                              color: Color(0xFF10B981),
+                              size: 22,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                LanguageService.text(
+                                  'Sesuai dengan Undang-Undang Perlindungan Data Pribadi (UU PDP No. 27/2022) Republik Indonesia.',
+                                  'Compliant with Personal Data Protection Law (PDP Law No. 27/2022) of the Republic of Indonesia.',
+                                ),
+                                style: GoogleFonts.poppins(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w500,
+                                  color: isDark
+                                      ? const Color(0xFF6EE7B7)
+                                      : const Color(0xFF065F46),
+                                  height: 1.4,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Section Items
+                      _buildPolicyCard(
+                        icon: Icons.badge_rounded,
+                        accentColor: cyanAccent,
+                        title: LanguageService.text(
+                          '1. Data Pribadi yang Dikumpulkan',
+                          '1. Personal Data Collected',
+                        ),
+                        desc: LanguageService.text(
+                          'Kami mengumpulkan identitas akun seperti Nama Lengkap, Alamat Email, Username unik, Nomor WhatsApp, Foto Profil (Avatar), dan Lokasi tempat tinggal untuk keperluan operasional akun dan manajemen server Anda.',
+                          'We collect account identity information including Full Name, Email Address, unique Username, WhatsApp Number, Profile Avatar, and Location for account operational purposes and server management.',
+                        ),
+                        isDark: isDark,
+                        textTitle: textTitle,
+                        textDesc: textDesc,
+                      ),
+                      const SizedBox(height: 12),
+
+                      _buildPolicyCard(
+                        icon: Icons.fingerprint_rounded,
+                        accentColor: const Color(0xFF10B981),
+                        title: LanguageService.text(
+                          '2. Keamanan Kredensial & Biometrik',
+                          '2. Credentials & Biometric Security',
+                        ),
+                        desc: LanguageService.text(
+                          '• Kata Sandi disimpan dalam bentuk hash terenkripsi.\n'
+                              '• PIN Transaksi 6-Digit wajib untuk otorisasi checkout & transfer.\n'
+                              '• Data Biometrik (Sidik Jari / Face ID) diproses 100% secara lokal pada Secure Enclave perangkat Anda dan TIDAK PERNAH dikirim atau disimpan di server VibeTech.',
+                          '• Passwords are encrypted with secure cryptographic hashes.\n'
+                              '• 6-Digit Transaction PIN is required for checkout & transfer authorization.\n'
+                              '• Biometric Data (Fingerprint / Face ID) is processed 100% locally on your device Secure Enclave and is NEVER transmitted to or stored on VibeTech servers.',
+                        ),
+                        isDark: isDark,
+                        textTitle: textTitle,
+                        textDesc: textDesc,
+                      ),
+                      const SizedBox(height: 12),
+
+                      _buildPolicyCard(
+                        icon: Icons.account_balance_wallet_rounded,
+                        accentColor: const Color(0xFFF59E0B),
+                        title: LanguageService.text(
+                          '3. Pembayaran & Gerbang Midtrans',
+                          '3. Payment & Midtrans Gateway',
+                        ),
+                        desc: LanguageService.text(
+                          'Transaksi pembayaran didukung oleh Saldo VibeWallet internal dan Gateway resmi Midtrans (QRIS Instant, GoPay, DANA, OVO, ShopeePay, dan Virtual Account Bank BCA, Mandiri, BRI, BNI, Permata). Kami tidak menyimpan data kartu debit/kredit mentah Anda.',
+                          'Payment transactions are powered by internal VibeWallet balance and official Midtrans Gateway (Instant QRIS, GoPay, DANA, OVO, ShopeePay, and Bank Virtual Accounts: BCA, Mandiri, BRI, BNI, Permata). We do not store your raw debit/credit card credentials.',
+                        ),
+                        isDark: isDark,
+                        textTitle: textTitle,
+                        textDesc: textDesc,
+                      ),
+                      const SizedBox(height: 12),
+
+                      _buildPolicyCard(
+                        icon: Icons.auto_awesome_rounded,
+                        accentColor: const Color(0xFFEC4899),
+                        title: LanguageService.text(
+                          '4. Asisten Cerdas Furina AI (Google Gemini)',
+                          '4. Furina AI Assistant (Google Gemini)',
+                        ),
+                        desc: LanguageService.text(
+                          'Pertanyaan konsultasi spesifikasi server dan diskon yang dikirimkan ke Furina AI diproses melalui model Google Gemini. Anda dapat mereset riwayat percakapan sesi kapan saja melalui tombol Reset Session.',
+                          'Technical consultation queries sent to Furina AI are processed through Google Gemini models. You can reset your conversation session history anytime via the Reset Session feature.',
+                        ),
+                        isDark: isDark,
+                        textTitle: textTitle,
+                        textDesc: textDesc,
+                      ),
+                      const SizedBox(height: 12),
+
+                      _buildPolicyCard(
+                        icon: Icons.dns_rounded,
+                        accentColor: purpleAccent,
+                        title: LanguageService.text(
+                          '5. Layanan Server Cloud & Hosting',
+                          '5. Cloud Server & Hosting Services',
+                        ),
+                        desc: LanguageService.text(
+                          'Informasi alokasi IP server, port, username server VPS, dan session ID WhatsApp bot disimpan dalam database terenkripsi untuk mengelola siklus aktif dan perpanjangan langganan server Anda.',
+                          'Server IP allocations, ports, VPS usernames, and WhatsApp bot session IDs are stored in encrypted databases to manage your server runtime lifecycle and subscription renewals.',
+                        ),
+                        isDark: isDark,
+                        textTitle: textTitle,
+                        textDesc: textDesc,
+                      ),
+                      const SizedBox(height: 12),
+
+                      _buildPolicyCard(
+                        icon: Icons.gavel_rounded,
+                        accentColor: const Color(0xFF38BDF8),
+                        title: LanguageService.text(
+                          '6. Hak Pengguna & Penghapusan Akun',
+                          '6. User Rights & Account Deletion',
+                        ),
+                        desc: LanguageService.text(
+                          'Anda memiliki hak penuh untuk mengakses data pribadi, memperbarui profil, mengubah password/PIN, mengunduh riwayat transaksi, serta mengajukan permohonan penutupan akun dan penghapusan data permanen kepada kami.',
+                          'You retain full rights to access personal data, update profile, change password/PIN, review transaction records, and request permanent account closure and data erasure.',
+                        ),
+                        isDark: isDark,
+                        textTitle: textTitle,
+                        textDesc: textDesc,
+                      ),
+                      const SizedBox(height: 12),
+
+                      _buildPolicyCard(
+                        icon: Icons.contact_support_rounded,
+                        accentColor: const Color(0xFF10B981),
+                        title: LanguageService.text(
+                          '7. Kontak Resmi Tim Privasi',
+                          '7. Official Privacy Contact',
+                        ),
+                        desc: LanguageService.text(
+                          '• Pengembang: Raziek (VibeTech XYZ)\n'
+                              '• Email: support@vibetech.xyz\n'
+                              '• WhatsApp CS: +62 878-8587-3325\n'
+                              '• Situs Web: https://vibetech.xyz',
+                          '• Developer: Raziek (VibeTech XYZ)\n'
+                              '• Email: support@vibetech.xyz\n'
+                              '• WhatsApp Support: +62 878-8587-3325\n'
+                              '• Website: https://vibetech.xyz',
+                        ),
+                        isDark: isDark,
+                        textTitle: textTitle,
+                        textDesc: textDesc,
+                      ),
+                      const SizedBox(height: 20),
+                    ],
+                  ),
+                ),
+              ),
+
+              // Bottom Action Button
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? const Color(0xFF090D1A)
+                      : const Color(0xFFF1F5F9),
+                  border: Border(
+                    top: BorderSide(
+                      color: isDark
+                          ? Colors.white.withValues(alpha: 0.08)
+                          : Colors.black.withValues(alpha: 0.06),
+                    ),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () {
+                          HapticFeedback.lightImpact();
+                          setState(() => _agreeTerms = true);
+                          Navigator.pop(ctx);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.check_circle_rounded,
+                                    color: Colors.white,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      LanguageService.text(
+                                        'Persetujuan Kebijakan Privasi berhasil disimpan.',
+                                        'Privacy Policy agreement recorded successfully.',
+                                      ),
+                                      style: GoogleFonts.poppins(
+                                        fontWeight: FontWeight.w500,
+                                        fontSize: 12.5,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              backgroundColor: const Color(0xFF10B981),
+                              behavior: SnackBarBehavior.floating,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              margin: const EdgeInsets.all(16),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        },
+                        child: Container(
+                          height: 48,
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF00E5FF), Color(0xFF7C4DFF)],
+                            ),
+                            borderRadius: BorderRadius.circular(14),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF00E5FF)
+                                    .withValues(alpha: 0.35),
+                                blurRadius: 14,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: Center(
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(
+                                  Icons.check_circle_rounded,
+                                  color: Colors.white,
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  LanguageService.text(
+                                    'Saya Mengerti & Setuju',
+                                    'I Understand & Agree',
+                                  ),
+                                  style: GoogleFonts.poppins(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildPolicyCard({
+    required IconData icon,
+    required Color accentColor,
+    required String title,
+    required String desc,
+    required bool isDark,
+    required Color textTitle,
+    required Color textDesc,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: isDark
+            ? const Color(0xFF141A29).withValues(alpha: 0.6)
+            : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark
+              ? Colors.white.withValues(alpha: 0.08)
+              : const Color(0xFFE2E8F0),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: accentColor.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: accentColor, size: 18),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: textTitle,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  desc,
+                  style: GoogleFonts.poppins(
+                    fontSize: 11.5,
+                    color: textDesc,
+                    height: 1.45,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -1,5 +1,9 @@
 import express from 'express';
 import cors from 'cors';
+import fs from 'fs';
+import path from 'path';
+import axios from 'axios';
+import FormData from 'form-data';
 import nodemailer from 'nodemailer';
 import midtransClient from 'midtrans-client';
 import {
@@ -38,6 +42,7 @@ app.get('/', (req, res) => {
       'POST /api/ai/furina',
       'POST /api/ai/reset-session',
       'GET  /api/ai/status',
+      'POST /api/qris/dynamic',
       'POST /api/charge',
       'GET  /api/status/:order_id',
     ],
@@ -141,6 +146,35 @@ app.post('/api/charge', async (req, res) => {
   try {
     const { order_id, gross_amount, customer_details, payment_method } = req.body;
 
+    // JIKA PEMBAYARAN QRIS: JANGAN GUNAKAN MIDTRANS, GUNAKAN QRIS DINAMIS NEXRAY
+    if (payment_method === 'qris') {
+      const nominal = String(gross_amount || req.body.nominal || '25000');
+      const form = new FormData();
+      form.append('nominal', nominal);
+
+      const possiblePaths = [
+        path.resolve('../assets/images/qris.jpg'),
+        path.resolve('./assets/images/qris.jpg'),
+        path.resolve('assets/images/qris.jpg'),
+      ];
+
+      for (const p of possiblePaths) {
+        if (fs.existsSync(p)) {
+          form.append('file', fs.createReadStream(p));
+          break;
+        }
+      }
+      form.append('url', req.body.url || '');
+
+      const response = await axios.post('https://api.nexray.eu.cc/payment/qris', form, {
+        headers: {
+          ...form.getHeaders(),
+        },
+      });
+
+      return res.status(200).json(response.data);
+    }
+
     let enabledPayments = [];
     switch (payment_method) {
       case 'gopay':
@@ -148,9 +182,6 @@ app.post('/api/charge', async (req, res) => {
         break;
       case 'shopeepay':
         enabledPayments = ['shopeepay'];
-        break;
-      case 'qris':
-        enabledPayments = ['qris', 'gopay'];
         break;
       case 'dana':
         enabledPayments = ['dana'];
@@ -165,7 +196,6 @@ app.post('/api/charge', async (req, res) => {
         enabledPayments = [
           'gopay',
           'shopeepay',
-          'qris',
           'dana',
           'ovo',
           'bca_va',
@@ -183,11 +213,119 @@ app.post('/api/charge', async (req, res) => {
       enabled_payments: enabledPayments,
     };
 
-    const transaction = await snap.createTransaction(parameter);
-    res.status(200).json({ redirect_url: transaction.redirect_url });
+    let transaction;
+    try {
+      transaction = await snap.createTransaction(parameter);
+    } catch (createErr) {
+      const errMsg = String(createErr.message || '').toLowerCase();
+      if (
+        errMsg.includes('order_id') ||
+        errMsg.includes('already been taken') ||
+        errMsg.includes('sudah digunakan')
+      ) {
+        const retryOrderId = `${order_id}-${Date.now() % 100000}`;
+        console.log(`[Charge Auto-Recovery] Order ID taken. Retrying with: ${retryOrderId}`);
+        parameter.transaction_details.order_id = retryOrderId;
+        transaction = await snap.createTransaction(parameter);
+      } else {
+        throw createErr;
+      }
+    }
+
+    // Otomatis ekstrak deep link / VA langsung dari Midtrans Snap Pay API
+    let directPayData = null;
+    let payChannel = null;
+    if (payment_method === 'gopay') payChannel = 'gopay';
+    else if (payment_method === 'shopeepay') payChannel = 'shopeepay';
+    else if (payment_method === 'dana') payChannel = 'dana';
+    else if (payment_method === 'bca_va' || payment_method === 'transfer') payChannel = 'bca_va';
+    else if (payment_method === 'bri_va') payChannel = 'bri_va';
+    else if (payment_method === 'bni_va') payChannel = 'bni_va';
+    else if (payment_method === 'mandiri_va' || payment_method === 'echannel') payChannel = 'echannel';
+
+    if (payChannel && transaction.token) {
+      try {
+        const snapPayBase = isProduction
+          ? 'https://app.midtrans.com/snap/v1/transactions'
+          : 'https://app.sandbox.midtrans.com/snap/v1/transactions';
+        const payPayload = { payment_type: payChannel };
+        if (payChannel === 'ovo' && customer_details && customer_details.phone) {
+          payPayload.customer_details = { phone: customer_details.phone };
+        }
+        const payRes = await axios.post(`${snapPayBase}/${transaction.token}/pay`, payPayload, {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 5000,
+        });
+        directPayData = payRes.data;
+      } catch (err) {
+        console.warn('[Direct Pay Warning]:', err.response?.data || err.message);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      order_id: parameter.transaction_details.order_id,
+      token: transaction.token,
+      redirect_url: transaction.redirect_url,
+      deeplink_url: directPayData?.deeplink_url || null,
+      qr_code_url: directPayData?.qr_code_url || null,
+      qr_string: directPayData?.qr_string || null,
+      va_number: directPayData?.bca_va_number ||
+        directPayData?.bri_va_number ||
+        directPayData?.bni_va_number ||
+        (directPayData?.va_numbers && directPayData.va_numbers[0]?.va_number) ||
+        null,
+      bank: payChannel,
+      expiry_time: directPayData?.expiry_time || null,
+      direct_data: directPayData,
+    });
   } catch (e) {
-    console.error('Snap Charge Error:', e.message);
+    console.error('Charge Error:', e.message);
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================================================
+// 3.5. ENDPOINT QRIS DINAMIS (NEXRAY API - CODINGAN DARI USER)
+// ============================================================================
+app.post('/api/qris/dynamic', async (req, res) => {
+  try {
+    const nominal = String(req.body.nominal || req.body.amount || '25000');
+    const form = new FormData();
+    form.append('nominal', nominal);
+
+    const possiblePaths = [
+      path.resolve('../assets/images/qris.jpg'),
+      path.resolve('./assets/images/qris.jpg'),
+      path.resolve('assets/images/qris.jpg'),
+    ];
+
+    let foundFile = false;
+    for (const p of possiblePaths) {
+      if (fs.existsSync(p)) {
+        form.append('file', fs.createReadStream(p));
+        foundFile = true;
+        break;
+      }
+    }
+    if (!foundFile) {
+      form.append('file', '');
+    }
+    form.append('url', req.body.url || '');
+
+    const response = await axios.post('https://api.nexray.eu.cc/payment/qris', form, {
+      headers: {
+        ...form.getHeaders(),
+      },
+    });
+
+    return res.status(200).json(response.data);
+  } catch (error) {
+    console.error('[QRIS Dynamic Endpoint Error]:', error.message);
+    return res.status(500).json({
+      status: false,
+      error: error.message,
+    });
   }
 });
 

@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -29,11 +27,7 @@ class KeranjangPage extends StatefulWidget {
   State<KeranjangPage> createState() => _KeranjangPageState();
 }
 
-class _KeranjangPageState extends State<KeranjangPage>
-    with SingleTickerProviderStateMixin {
-  final List<AppParticle> _particles = [];
-  final math.Random _random = math.Random();
-  late AnimationController _particleController;
+class _KeranjangPageState extends State<KeranjangPage> {
 
   final NumberFormat _currencyFormatter = NumberFormat.currency(
     locale: 'id_ID',
@@ -41,25 +35,7 @@ class _KeranjangPageState extends State<KeranjangPage>
     decimalDigits: 0,
   );
 
-  @override
-  void initState() {
-    super.initState();
-    // Inisialisasi Partikel Cyber Ambient (Dark Mode)
-    _particles.addAll(AppParticle.generateList(_random, count: 20));
-    _particleController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 10),
-    )..repeat();
-    _particleController.addListener(() {
-      AppParticle.updatePositions(_particles);
-    });
-  }
 
-  @override
-  void dispose() {
-    _particleController.dispose();
-    super.dispose();
-  }
 
   Color get _bgColor =>
       widget.isDarkMode ? AppColors.darkBg : AppColors.lightBg;
@@ -120,17 +96,7 @@ class _KeranjangPageState extends State<KeranjangPage>
       body: Stack(
         children: [
           if (widget.isDarkMode)
-            Positioned.fill(
-              child: AnimatedBuilder(
-                animation: _particleController,
-                builder: (context, child) {
-                  return CustomPaint(
-                    size: MediaQuery.of(context).size,
-                    painter: AppParticlePainter(_particles),
-                  );
-                },
-              ),
-            ),
+            const CyberParticlesLayer(count: 20),
           ValueListenableBuilder<List<Map<String, dynamic>>>(
             valueListenable: CartService.notifier,
             builder: (context, cartItems, _) {

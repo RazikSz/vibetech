@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -10,6 +8,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../constants/constants.dart';
 import '../../database/db_helper.dart';
 import '../../models/service_model.dart';
+import '../../services/cloud_sync_service.dart';
+import '../../services/firebase_transaction_service.dart';
 import '../../services/language_service.dart';
 import '../home/produk_page.dart';
 
@@ -34,15 +34,12 @@ class DataBotWaPage extends StatefulWidget {
   State<DataBotWaPage> createState() => _DataBotWaPageState();
 }
 
-class _DataBotWaPageState extends State<DataBotWaPage>
-    with SingleTickerProviderStateMixin {
+class _DataBotWaPageState extends State<DataBotWaPage> {
   List<PurchasedService> _botList = [];
-  bool _isLoading = true;
   String _activeEmail = 'user@vibetech.com';
-
-  late AnimationController _particleController;
-  final List<AppParticle> _particles = [];
-  final math.Random _random = math.Random();
+  String _currentUserRole = 'user';
+  bool get _isAdmin =>
+      _currentUserRole == 'admin' || _currentUserRole == 'administrator';
 
   Color get _bgColor =>
       widget.isDarkMode ? AppColors.darkBg : AppColors.lightBg;
@@ -58,24 +55,28 @@ class _DataBotWaPageState extends State<DataBotWaPage>
   @override
   void initState() {
     super.initState();
-    // Inisialisasi Partikel Cyber Ambient (Dark Mode)
-    _particles.addAll(AppParticle.generateList(_random, count: 20));
-    _particleController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 10),
-    )..repeat();
-    _particleController.addListener(() {
-      AppParticle.updatePositions(_particles);
-    });
-
     _activeEmail = widget.userEmail;
     // Menginisialisasi email aktif dan memuat akun sewa Bot WhatsApp dari SQLite
     _initAndLoadBotData();
+
+    // Hubungkan streaming listener real-time Firebase RTDB untuk pembaruan instan
+    _botRealtimeListener = () {
+      if (mounted) {
+        _loadBotData();
+      }
+    };
+    CloudSyncService.instance.servicesNotifier
+        .addListener(_botRealtimeListener!);
   }
+
+  VoidCallback? _botRealtimeListener;
 
   @override
   void dispose() {
-    _particleController.dispose();
+    if (_botRealtimeListener != null) {
+      CloudSyncService.instance.servicesNotifier
+          .removeListener(_botRealtimeListener!);
+    }
     super.dispose();
   }
 
@@ -87,6 +88,10 @@ class _DataBotWaPageState extends State<DataBotWaPage>
       if (savedEmail != null && savedEmail.isNotEmpty) {
         _activeEmail = savedEmail;
       }
+      final savedRole = prefs.getString('role');
+      if (savedRole != null && savedRole.isNotEmpty) {
+        _currentUserRole = savedRole.toLowerCase();
+      }
     } catch (_) {}
     await _loadBotData();
   }
@@ -94,14 +99,17 @@ class _DataBotWaPageState extends State<DataBotWaPage>
   /// Memuat daftar Bot WhatsApp milik pengguna dari database SQLite
   Future<void> _loadBotData() async {
     if (!mounted) return;
-    setState(() => _isLoading = true);
-    final raw = await DatabaseHelper.instance
-        .getServicesByCategory(_activeEmail, 'Bot WhatsApp');
-    if (mounted) {
-      setState(() {
-        _botList = raw.map((e) => PurchasedService.fromMap(e)).toList();
-        _isLoading = false;
-      });
+    try {
+      final raw = await DatabaseHelper.instance
+          .getServicesByCategory(_activeEmail, 'Bot WhatsApp')
+          .timeout(const Duration(seconds: 4), onTimeout: () => []);
+      if (mounted) {
+        setState(() {
+          _botList = raw.map((e) => PurchasedService.fromMap(e)).toList();
+        });
+      }
+    } catch (e) {
+      debugPrint('[DataBotWaPage] Error loading Bot WA data: $e');
     }
   }
 
@@ -253,6 +261,19 @@ class _DataBotWaPageState extends State<DataBotWaPage>
   }
 
   void _showAddBotDialog() {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat menambah data Bot WA manual.',
+            'Access Denied! Only Administrators can add manual WhatsApp Bot data.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
     final nameCtrl = TextEditingController(text: 'Bot WA Multi-Device');
     final sessionCtrl = TextEditingController(
         text:
@@ -311,7 +332,7 @@ class _DataBotWaPageState extends State<DataBotWaPage>
               if (nameCtrl.text.isEmpty) return;
               final now = DateTime.now();
               await DatabaseHelper.instance.createService({
-                'user_email': widget.userEmail,
+                'user_email': _activeEmail,
                 'nama_produk': nameCtrl.text,
                 'kategori': 'Bot WhatsApp',
                 'harga': double.tryParse(priceCtrl.text) ?? 50000.0,
@@ -319,7 +340,7 @@ class _DataBotWaPageState extends State<DataBotWaPage>
                 'tanggal_kadaluarsa':
                     now.add(const Duration(days: 30)).toIso8601String(),
                 'status': 'Aktif',
-                'username': widget.userEmail,
+                'username': _activeEmail,
                 'session_id': sessionCtrl.text,
                 'spesifikasi': specsCtrl.text,
                 'extra_data': 'PAIR-CODE: ${pairCtrl.text}',
@@ -338,6 +359,19 @@ class _DataBotWaPageState extends State<DataBotWaPage>
   }
 
   void _showDeleteConfirmDialog(int id, String name) {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat menghapus data Bot WA.',
+            'Access Denied! Only Administrators can delete WhatsApp Bot data.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -368,6 +402,11 @@ class _DataBotWaPageState extends State<DataBotWaPage>
             ),
             onPressed: () async {
               await DatabaseHelper.instance.deleteService(id);
+              await FirebaseTransactionService.instance.deleteServiceFromFirebase(
+                id,
+                namaProduk: name,
+                userEmail: _activeEmail,
+              );
               if (!ctx.mounted) return;
               Navigator.pop(ctx);
               _loadBotData();
@@ -419,33 +458,22 @@ class _DataBotWaPageState extends State<DataBotWaPage>
               color: _textPrimary, fontWeight: FontWeight.bold, fontSize: 18),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.add_circle_outline_rounded,
-                color: AppColors.emerald),
-            onPressed: _showAddBotDialog,
-            tooltip: LanguageService.text('Tambah Bot', 'Add Bot'),
-          ),
+          if (_isAdmin)
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline_rounded,
+                  color: AppColors.emerald),
+              onPressed: _showAddBotDialog,
+              tooltip: LanguageService.text('Tambah Bot', 'Add Bot'),
+            ),
         ],
       ),
       body: Stack(
         children: [
           if (widget.isDarkMode)
-            Positioned.fill(
-              child: AnimatedBuilder(
-                animation: _particleController,
-                builder: (context, child) {
-                  return CustomPaint(
-                    size: MediaQuery.of(context).size,
-                    painter: AppParticlePainter(_particles),
-                  );
-                },
-              ),
-            ),
-          _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : _botList.isEmpty
-                  ? _buildEmptyState()
-                  : RefreshIndicator(
+            const CyberParticlesLayer(count: 20),
+          _botList.isEmpty
+              ? _buildEmptyState()
+              : RefreshIndicator(
                       onRefresh: _loadBotData,
                       child: ListView.builder(
                         padding: const EdgeInsets.symmetric(
@@ -522,17 +550,19 @@ class _DataBotWaPageState extends State<DataBotWaPage>
                 ),
               ),
             ),
-            const SizedBox(height: 12),
-            TextButton.icon(
-              onPressed: _showAddBotDialog,
-              icon: Icon(Icons.add_circle_outline_rounded,
-                  color: _textSecondary, size: 16),
-              label: Text(
-                LanguageService.text('Atau Tambah Kredensial Manual',
-                    'Or Add Credentials Manually'),
-                style: GoogleFonts.poppins(color: _textSecondary, fontSize: 12),
+            if (_isAdmin) ...[
+              const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: _showAddBotDialog,
+                icon: Icon(Icons.add_circle_outline_rounded,
+                    color: _textSecondary, size: 16),
+                label: Text(
+                  LanguageService.text('Atau Tambah Kredensial Manual',
+                      'Or Add Credentials Manually'),
+                  style: GoogleFonts.poppins(color: _textSecondary, fontSize: 12),
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),
@@ -801,14 +831,16 @@ class _DataBotWaPageState extends State<DataBotWaPage>
                             fontSize: 14,
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline_rounded,
-                              color: AppColors.error, size: 20),
-                          onPressed: () => _showDeleteConfirmDialog(
-                              bot.id ?? 0, bot.namaProduk),
-                          tooltip: LanguageService.tr('hapus'),
-                        ),
+                        if (_isAdmin) ...[
+                          const SizedBox(width: 8),
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline_rounded,
+                                color: AppColors.error, size: 20),
+                            onPressed: () => _showDeleteConfirmDialog(
+                                bot.id ?? 0, bot.namaProduk),
+                            tooltip: LanguageService.tr('hapus'),
+                          ),
+                        ],
                       ],
                     ),
                   ],

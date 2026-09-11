@@ -43,3 +43,19 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+android/build/
+android/app/build/
+.gradle/
+node_modules/
+
+# Security & Secrets Protection (Never commit credentials)
+whatsapp-admin-bot/.env
+whatsapp-admin-bot/serviceAccountKey.json
+whatsapp-admin-bot/auth_info_baileys/
+*.env
+serviceAccountKey.json
+key.properties
+*.jks
+*.keystore
+
+

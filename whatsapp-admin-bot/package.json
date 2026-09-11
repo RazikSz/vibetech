@@ -1,0 +1,32 @@
+{
+  "name": "vibetech-whatsapp-admin-bot",
+  "version": "1.0.0",
+  "description": "WhatsApp Admin Bot for Vibetech XYZ - Manage Products and User Balance via WhatsApp Commands",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "baileys",
+    "firebase",
+    "admin",
+    "vibetech"
+  ],
+  "author": "Vibetech XYZ",
+  "license": "ISC",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.6.0",
+    "dotenv": "^16.4.5",
+    "firebase-admin": "^12.0.0",
+    "node-cache": "^5.1.2",
+    "pino": "^8.19.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}

@@ -1,7 +1,7 @@
 name: vibetech_xyz
 description: Aplikasi Penjualan VPS, Sewa Bot WhatsApp, dan Panel Hosting
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.1+23
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -9,6 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  crypto: ^3.0.3
   firebase_core:
   firebase_auth:
   cloud_firestore:
@@ -32,12 +33,20 @@ dependencies:
   http: ^1.6.0
   shared_preferences: ^2.5.5
   mailer: ^6.1.1
+  flutter_local_notifications: ^22.3.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^2.0.0
   flutter_launcher_icons: ^0.14.4
+
+hooks:
+  user_defines:
+    sqlite3:
+      source: system
+      name_windows: winsqlite3
+      name: sqlite3
 
 flutter_launcher_icons:
   android: "launcher_icon"
@@ -51,4 +60,3 @@ flutter:
     - assets/images/
     - assets/animation/
     - assets/icon/
-    - assets/ss_vibetech/

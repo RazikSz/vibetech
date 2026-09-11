@@ -29,7 +29,6 @@ class _NotifikasiPageState extends State<NotifikasiPage>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   String _activeEmail = 'user@vibetech.com';
-  bool _isLoading = true;
 
   List<Map<String, dynamic>> _notifications = [];
   List<Map<String, dynamic>> _emailInbox = [];
@@ -55,10 +54,6 @@ class _NotifikasiPageState extends State<NotifikasiPage>
       await _loadDataFromDB();
     } catch (e) {
       debugPrint('Error initializing NotifikasiPage: $e');
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
     }
   }
 
@@ -282,10 +277,7 @@ class _NotifikasiPageState extends State<NotifikasiPage>
           ],
         ),
       ),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppColors.primary))
-          : TabBarView(
+      body: TabBarView(
               controller: _tabController,
               children: [
                 // Tab 1: Semua

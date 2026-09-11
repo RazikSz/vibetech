@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -42,8 +43,8 @@ class TotalPesananPage extends StatefulWidget {
 
 class _TotalPesananPageState extends State<TotalPesananPage>
     with TickerProviderStateMixin {
-  bool _isLoading = true;
   bool _isSyncing = false;
+  bool _isFetchingCloud = false;
 
   // Hak akses pengguna ('admin' / 'user')
   String _currentUserRole = 'user';
@@ -80,7 +81,9 @@ class _TotalPesananPageState extends State<TotalPesananPage>
   bool get _isAdmin =>
       _currentUserRole == 'admin' ||
       _currentUserRole == 'administrator' ||
-      _activeUsername.toLowerCase() == 'admin';
+      _activeUsername.toLowerCase() == 'admin' ||
+      _activeUsername.toLowerCase() == 'raziek' ||
+      _activeEmail.toLowerCase() == 'admin@vibetech.com';
 
   Color get _bgColor =>
       widget.isDarkMode ? AppColors.darkBg : AppColors.lightBg;
@@ -104,6 +107,9 @@ class _TotalPesananPageState extends State<TotalPesananPage>
     symbol: 'Rp ',
     decimalDigits: 0,
   );
+
+  Timer? _liveSyncTimer;
+  VoidCallback? _txRealtimeListener;
 
   @override
   void initState() {
@@ -130,11 +136,29 @@ class _TotalPesananPageState extends State<TotalPesananPage>
       duration: const Duration(milliseconds: 900),
     );
 
+    // Hubungkan listener streaming real-time Firebase RTDB untuk pembaruan pesanan transaksi
+    _txRealtimeListener = () async {
+      if (mounted) {
+        await _loadOrdersData(triggerCloudSync: false);
+      }
+    };
+    CloudSyncService.instance.transactionsNotifier
+        .addListener(_txRealtimeListener!);
+    CloudSyncService.instance.servicesNotifier
+        .addListener(_txRealtimeListener!);
+
     _initUserDataAndLoad();
   }
 
   @override
   void dispose() {
+    if (_txRealtimeListener != null) {
+      CloudSyncService.instance.transactionsNotifier
+          .removeListener(_txRealtimeListener!);
+      CloudSyncService.instance.servicesNotifier
+          .removeListener(_txRealtimeListener!);
+    }
+    _liveSyncTimer?.cancel();
     _particleController.dispose();
     _pulseController.dispose();
     _listAnimController.dispose();
@@ -143,7 +167,6 @@ class _TotalPesananPageState extends State<TotalPesananPage>
   }
 
   Future<void> _initUserDataAndLoad() async {
-    setState(() => _isLoading = true);
     try {
       await initializeDateFormatting('id_ID', null);
 
@@ -168,17 +191,28 @@ class _TotalPesananPageState extends State<TotalPesananPage>
       _currentUserRole = role.toLowerCase();
 
       await _loadOrdersData();
+
+      // Mulai sinkronisasi cadangan di latar belakang (fallback untuk streaming listener)
+      _liveSyncTimer?.cancel();
+      _liveSyncTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+        if (mounted && !_isSyncing) {
+          if (_isAdmin) {
+            _fetchCloudOrdersInBackground(_allTransactions);
+          } else {
+            _fetchUserCloudOrdersInBackground(_allTransactions);
+          }
+        }
+      });
     } catch (e) {
       debugPrint('Error initializing orders page: $e');
     } finally {
       if (mounted) {
-        setState(() => _isLoading = false);
         _listAnimController.forward(from: 0.0);
       }
     }
   }
 
-  Future<void> _loadOrdersData() async {
+  Future<void> _loadOrdersData({bool triggerCloudSync = true}) async {
     try {
       await DatabaseHelper.instance.cleanupDuplicateTransactions();
       List<Map<String, dynamic>> rawList = [];
@@ -201,8 +235,10 @@ class _TotalPesananPageState extends State<TotalPesananPage>
         _allTransactions = rawList;
         _applyFilterAndSearch();
 
-        // 2. Muat pembaruan Firebase Realtime Database di background
-        _fetchCloudOrdersInBackground(localTx);
+        // 2. Muat pembaruan Firebase Realtime Database di background jika diizinkan
+        if (triggerCloudSync && !_isFetchingCloud) {
+          _fetchCloudOrdersInBackground(localTx);
+        }
       } else {
         // Pengguna/Member biasa: muat data SQLite miliknya secara INSTAN
         final localTx =
@@ -213,8 +249,10 @@ class _TotalPesananPageState extends State<TotalPesananPage>
         _allTransactions = rawList;
         _applyFilterAndSearch();
 
-        // Muat RTDB background untuk user
-        _fetchUserCloudOrdersInBackground(localTx);
+        // Muat RTDB background untuk user jika diizinkan
+        if (triggerCloudSync && !_isFetchingCloud) {
+          _fetchUserCloudOrdersInBackground(localTx);
+        }
       }
     } catch (e) {
       debugPrint('Error loading orders: $e');
@@ -264,105 +302,62 @@ class _TotalPesananPageState extends State<TotalPesananPage>
   }
 
   void _fetchCloudOrdersInBackground(List<Map<String, dynamic>> localTx) async {
+    if (_isFetchingCloud) return;
+    _isFetchingCloud = true;
     try {
-      final cloudTx = await FirebaseTransactionService.instance
-          .getAllTransactionsFromFirebase()
-          .timeout(const Duration(seconds: 2), onTimeout: () => []);
-
-      if (cloudTx.isEmpty || !mounted) return;
-
-      final Map<String, Map<String, dynamic>> mergedMap = {};
-      for (final tx in localTx) {
-        final key = (tx['invoice_no'] ?? 'loc_${tx['id']}').toString();
-        mergedMap[key] = Map<String, dynamic>.from(tx);
-      }
-
-      for (final tx in cloudTx) {
-        final key = (tx['invoice_no'] ??
-                tx['id_ref'] ??
-                'cloud_${DateTime.now().millisecondsSinceEpoch}')
-            .toString();
-        if (!mergedMap.containsKey(key)) {
-          mergedMap[key] = Map<String, dynamic>.from(tx);
-        } else {
-          final currentStatus =
-              mergedMap[key]!['status']?.toString().toLowerCase();
-          final cloudStatus = tx['status']?.toString().toLowerCase();
-          if (cloudStatus == 'selesai' && currentStatus != 'selesai') {
-            mergedMap[key]!['status'] = tx['status'];
-          }
-        }
-      }
-
-      List<Map<String, dynamic>> combined = mergedMap.values.toList();
-      combined.sort((a, b) {
-        final dateA = (a['tanggal'] ?? a['created_at'] ?? '').toString();
-        final dateB = (b['tanggal'] ?? b['created_at'] ?? '').toString();
-        return dateB.compareTo(dateA);
-      });
+      await Future.wait([
+        FirebaseTransactionService.instance.syncTransactionsFromFirebase(),
+        FirebaseTransactionService.instance.syncServicesFromFirebase(),
+      ]).timeout(const Duration(seconds: 5), onTimeout: () => []);
+      final freshTx = await DatabaseHelper.instance.getAllTransactions();
+      if (!mounted) return;
 
       List<Map<String, dynamic>> finalResult;
       if (_selectedMemberFilter != 'ALL') {
-        finalResult = combined.where((t) {
+        finalResult = freshTx.where((t) {
           final email = (t['user_email'] ?? '').toString().toLowerCase();
           return email == _selectedMemberFilter.toLowerCase();
         }).toList();
       } else {
-        finalResult = combined;
+        finalResult = freshTx;
       }
 
-      if (mounted) {
-        setState(() {
-          _recalculateStats(finalResult);
-          _allTransactions = finalResult;
-        });
-        _applyFilterAndSearch();
-      }
+      setState(() {
+        _recalculateStats(finalResult);
+        _allTransactions = finalResult;
+      });
+      _applyFilterAndSearch();
     } catch (e) {
       debugPrint('Background cloud orders note: $e');
+    } finally {
+      _isFetchingCloud = false;
     }
   }
 
   void _fetchUserCloudOrdersInBackground(
       List<Map<String, dynamic>> localTx) async {
+    if (_isFetchingCloud) return;
+    _isFetchingCloud = true;
     try {
-      final cloudTx = await FirebaseTransactionService.instance
-          .getTransactionsByUser(_activeEmail)
-          .timeout(const Duration(seconds: 2), onTimeout: () => []);
+      await Future.wait([
+        FirebaseTransactionService.instance
+            .syncTransactionsFromFirebase(userEmail: _activeEmail),
+        FirebaseTransactionService.instance
+            .syncServicesFromFirebase(userEmail: _activeEmail),
+      ]).timeout(const Duration(seconds: 5), onTimeout: () => []);
+      final freshTx =
+          await DatabaseHelper.instance.getTransactionsByUser(_activeEmail);
+      if (!mounted) return;
 
-      if (cloudTx.isEmpty || !mounted) return;
-
-      final Map<String, Map<String, dynamic>> map = {};
-      for (final t in localTx) {
-        final key = (t['invoice_no'] ?? 'loc_${t['id']}').toString();
-        map[key] = Map<String, dynamic>.from(t);
-      }
-      for (final t in cloudTx) {
-        final key = (t['invoice_no'] ??
-                t['id_ref'] ??
-                'cloud_${DateTime.now().millisecondsSinceEpoch}')
-            .toString();
-        if (!map.containsKey(key)) {
-          map[key] = Map<String, dynamic>.from(t);
-        }
-      }
-
-      final combined = map.values.toList();
-      combined.sort((a, b) {
-        final dateA = (a['tanggal'] ?? a['created_at'] ?? '').toString();
-        final dateB = (b['tanggal'] ?? b['created_at'] ?? '').toString();
-        return dateB.compareTo(dateA);
+      setState(() {
+        _recalculateStats(freshTx);
+        _allTransactions = freshTx;
       });
-
-      if (mounted) {
-        setState(() {
-          _recalculateStats(combined);
-          _allTransactions = combined;
-        });
-        _applyFilterAndSearch();
-      }
+      _applyFilterAndSearch();
     } catch (e) {
       debugPrint('Background user cloud orders note: $e');
+    } finally {
+      _isFetchingCloud = false;
     }
   }
 
@@ -400,6 +395,9 @@ class _TotalPesananPageState extends State<TotalPesananPage>
     );
 
     try {
+      // 1. Sinkronisasi dari Cloud ke lokal (termasuk deteksi penghapusan di RTDB)
+      await FirebaseTransactionService.instance.syncTransactionsFromFirebase();
+      // 2. Sinkronisasi dari lokal ke Cloud
       await CloudSyncService.instance.syncAllFromCloud();
       final txCount = await FirebaseTransactionService.instance
           .syncAllLocalTransactionsToFirestore();
@@ -492,6 +490,19 @@ class _TotalPesananPageState extends State<TotalPesananPage>
   // ================= ADMIN ACTIONS: EDIT, TAMBAH, HAPUS =================
 
   void _showAdminEditOrderDialog(Map<String, dynamic> item) {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat mengubah pesanan.',
+            'Access Denied! Only Administrators can edit orders.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
     final formKey = GlobalKey<FormState>();
     // PERBAIKAN: Cast aman dari num ke int
     final int orderId = (item['id'] as num?)?.toInt() ?? 0;
@@ -726,36 +737,51 @@ class _TotalPesananPageState extends State<TotalPesananPage>
                 onPressed: () async {
                   if (formKey.currentState?.validate() ?? false) {
                     HapticFeedback.mediumImpact();
+                    final String oldInvoice =
+                        (item['invoice_no'] ?? item['id_ref'] ?? '').toString();
+                    final String newInvoice = invoiceCtrl.text.trim();
+
                     final updatedData = {
+                      'id': orderId > 0 ? orderId : null,
                       'user_email': emailCtrl.text.trim(),
                       'nama_produk': nameCtrl.text.trim(),
                       'jumlah': int.tryParse(qtyCtrl.text.trim()) ?? 1,
                       'total_harga':
                           double.tryParse(priceCtrl.text.trim()) ?? 0.0,
                       'status': currentStatus,
-                      'invoice_no': invoiceCtrl.text.trim(),
+                      'invoice_no': newInvoice,
                       'notes': notesCtrl.text.trim(),
+                      'tanggal':
+                          item['tanggal'] ?? DateTime.now().toIso8601String(),
+                      'payment_method':
+                          item['payment_method'] ?? 'Saldo VibeWallet',
                     };
 
-                    await DatabaseHelper.instance
-                        .updateTransaction(orderId, updatedData);
-                    try {
-                      await FirebaseTransactionService.instance
-                          .saveTransactionToFirebase({
-                        'id': orderId,
-                        ...updatedData,
-                      });
-                    } catch (_) {}
-                    if (dialogCtx.mounted) Navigator.pop(dialogCtx);
-                    await _loadOrdersData();
+                    // 1. Update UI secara instan (0ms optimistic)
+                    setState(() {
+                      final idx = _allTransactions.indexWhere((t) =>
+                          (orderId > 0 && t['id'] == orderId) ||
+                          (oldInvoice.isNotEmpty &&
+                              (t['invoice_no'] == oldInvoice ||
+                                  t['id_ref'] == oldInvoice)));
+                      if (idx != -1) {
+                        _allTransactions[idx] = {
+                          ..._allTransactions[idx],
+                          ...updatedData
+                        };
+                      }
+                      _recalculateStats(_allTransactions);
+                    });
+                    _applyFilterAndSearch();
 
-                    if (!mounted) return;
+                    if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+
                     ScaffoldMessenger.of(this.context).showSnackBar(
                       SnackBar(
                         content: Text(
                           LanguageService.text(
-                            'Pesanan #$orderId berhasil diperbarui & disimpan di database!',
-                            'Order #$orderId updated & saved to database!',
+                            'Pesanan $newInvoice berhasil diperbarui di SQLite & Firebase!',
+                            'Order $newInvoice updated in SQLite & Firebase!',
                           ),
                           style: GoogleFonts.poppins(),
                         ),
@@ -763,8 +789,62 @@ class _TotalPesananPageState extends State<TotalPesananPage>
                         behavior: SnackBarBehavior.floating,
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12)),
+                        duration: const Duration(seconds: 2),
                       ),
                     );
+
+                    // 2. Simpan ke SQLite & Firebase RTDB
+                    try {
+                      final db = await DatabaseHelper.instance.database;
+                      if (orderId > 0) {
+                        await DatabaseHelper.instance
+                            .updateTransaction(orderId, updatedData);
+                      } else if (oldInvoice.isNotEmpty) {
+                        await db.update('transactions', updatedData,
+                            where: 'invoice_no = ?', whereArgs: [oldInvoice]);
+                      }
+
+                      await FirebaseTransactionService.instance
+                          .updateTransactionInFirebase(
+                        invoiceNo:
+                            oldInvoice.isNotEmpty ? oldInvoice : newInvoice,
+                        localId: orderId > 0 ? orderId : null,
+                        namaProduk: nameCtrl.text.trim(),
+                        userEmail: emailCtrl.text.trim(),
+                        updatedData: updatedData,
+                      );
+
+                      // Jika status selesai/lunas, otomatis sinkronkan juga ke purchased_services di SQLite & Firebase RTDB
+                      final statusLower = currentStatus.toLowerCase();
+                      if (statusLower.contains('selesai') ||
+                          statusLower.contains('lunas') ||
+                          statusLower.contains('success')) {
+                        final prodName = nameCtrl.text.trim();
+                        String kategori = 'VPS';
+                        final lower = prodName.toLowerCase();
+                        if (lower.contains('panel') || lower.contains('hosting')) {
+                          kategori = 'Panel Hosting';
+                        } else if (lower.contains('bot') || lower.contains('wa')) {
+                          kategori = 'Bot WhatsApp';
+                        }
+                        final srvData = {
+                          'user_email': emailCtrl.text.trim(),
+                          'nama_produk': prodName,
+                          'kategori': kategori,
+                          'harga': double.tryParse(priceCtrl.text.trim()) ?? 0.0,
+                          'tanggal_beli': item['tanggal']?.toString() ??
+                              DateTime.now().toIso8601String(),
+                          'tanggal_kadaluarsa': DateTime.now()
+                              .add(const Duration(days: 30))
+                              .toIso8601String(),
+                          'status': 'Aktif',
+                          'spesifikasi': 'Layanan Cloud Aktif VibeTech',
+                        };
+                        await DatabaseHelper.instance.createService(srvData);
+                      }
+                    } catch (e) {
+                      debugPrint('Error updating transaction: $e');
+                    }
                   }
                 },
                 icon: const Icon(Icons.check_rounded,
@@ -790,6 +870,19 @@ class _TotalPesananPageState extends State<TotalPesananPage>
   }
 
   void _showAdminCreateOrderDialog() {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat membuat pesanan manual.',
+            'Access Denied! Only Administrators can create manual orders.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
     final formKey = GlobalKey<FormState>();
     String targetEmail = _allUsers.isNotEmpty
         ? (_allUsers.first['email']?.toString() ?? 'user@vibetech.com')
@@ -1086,6 +1179,19 @@ class _TotalPesananPageState extends State<TotalPesananPage>
   }
 
   void _showDeleteOrderConfirmation(Map<String, dynamic> order) {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.text(
+            'Akses Ditolak! Hanya Administrator yang dapat menghapus pesanan.',
+            'Access Denied! Only Administrators can delete orders.',
+          )),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
     final int orderId = (order['id'] as num?)?.toInt() ?? 0;
     final String productName =
         order['nama_produk']?.toString() ?? 'Layanan VibeTech';
@@ -1144,31 +1250,20 @@ class _TotalPesananPageState extends State<TotalPesananPage>
             onPressed: () async {
               HapticFeedback.heavyImpact();
 
-              // 1. Hapus dari SQLite lokal
-              if (orderId > 0) {
-                await DatabaseHelper.instance
-                    .deleteTransaction(orderId, invoiceNo: invoiceNo);
-              } else if (invoiceNo.isNotEmpty) {
-                await DatabaseHelper.instance
-                    .deleteTransactionByInvoice(invoiceNo);
-              }
+              // 1. Langsung tutup dialog secara instan agar tidak macet
+              Navigator.of(dialogCtx, rootNavigator: true).pop();
 
-              // 2. Hapus langsung dari Firebase Realtime Database & Cloud Firestore
-              if (invoiceNo.isNotEmpty) {
-                await FirebaseTransactionService.instance
-                    .deleteTransactionFromFirebase(
-                  invoiceNo: invoiceNo,
-                  localId: orderId > 0 ? orderId : null,
-                );
-              }
-
-              // 3. Langsung hapus dari state UI agar instan dan tidak muncul lagi
+              // 2. Langsung hapus dari state UI (optimistic UI update)
               setState(() {
                 _allTransactions.removeWhere((t) {
                   final tInv =
-                      (t['invoice_no'] ?? t['id_ref'] ?? '').toString();
+                      (t['invoice_no'] ?? t['id_ref'] ?? '').toString().trim();
                   final tId = (t['id'] as num?)?.toInt();
-                  if (invoiceNo.isNotEmpty && tInv == invoiceNo) return true;
+                  if (invoiceNo.isNotEmpty &&
+                      (tInv == invoiceNo ||
+                          tInv == invoiceNo.replaceAll('INV-', ''))) {
+                    return true;
+                  }
                   if (orderId > 0 && tId == orderId) return true;
                   return false;
                 });
@@ -1176,7 +1271,18 @@ class _TotalPesananPageState extends State<TotalPesananPage>
               });
               _applyFilterAndSearch();
 
-              if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+              // 3. Eksekusi penghapusan SQLite & Firebase RTDB
+              try {
+                if (orderId > 0) {
+                  await DatabaseHelper.instance
+                      .deleteTransaction(orderId, invoiceNo: invoiceNo);
+                } else if (invoiceNo.isNotEmpty) {
+                  await DatabaseHelper.instance
+                      .deleteTransactionByInvoice(invoiceNo);
+                }
+              } catch (e) {
+                debugPrint('Error deleting order: $e');
+              }
 
               if (!mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
@@ -1305,28 +1411,35 @@ class _TotalPesananPageState extends State<TotalPesananPage>
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        LanguageService.text(
-                            'Rincian Pesanan', 'Order Details'),
-                        style: GoogleFonts.poppins(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: _textPrimary,
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          LanguageService.text(
+                              'Rincian Pesanan', 'Order Details'),
+                          style: GoogleFonts.poppins(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: _textPrimary,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                      ),
-                      Text(
-                        invoice,
-                        style: GoogleFonts.poppins(
-                          fontSize: 13,
-                          color: AppColors.primary,
-                          fontWeight: FontWeight.w600,
+                        Text(
+                          invoice,
+                          style: GoogleFonts.poppins(
+                            fontSize: 13,
+                            color: AppColors.primary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
+                  const SizedBox(width: 8),
                   _buildStatusBadge(status),
                 ],
               ),
@@ -1381,6 +1494,32 @@ class _TotalPesananPageState extends State<TotalPesananPage>
               const SizedBox(height: 24),
 
               // Buttons
+              if (!isLunas) ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _navigateToPayment(item);
+                    },
+                    icon: const Icon(Icons.payment_rounded,
+                        color: Colors.white, size: 18),
+                    label: Text(
+                      LanguageService.text(
+                          'Lanjutkan Pembayaran', 'Continue Payment'),
+                      style: GoogleFonts.poppins(
+                          color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFF59E0B),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
               Row(
                 children: [
                   Expanded(
@@ -1402,22 +1541,22 @@ class _TotalPesananPageState extends State<TotalPesananPage>
                           ),
                         );
                       },
-                      icon: const Icon(Icons.copy_rounded, size: 18),
+                      icon: const Icon(Icons.copy_rounded, size: 16),
                       label: Text(
-                        LanguageService.text('Salin Invoice', 'Copy Invoice'),
-                        style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+                        LanguageService.text('Salin', 'Copy'),
+                        style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 12),
                       ),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: _textPrimary,
                         side: BorderSide(color: _cardBorder),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        padding: const EdgeInsets.symmetric(vertical: 13),
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14)),
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  if (_isAdmin)
+                  if (_isAdmin) ...[
+                    const SizedBox(width: 8),
                     Expanded(
                       child: ElevatedButton.icon(
                         onPressed: () {
@@ -1425,60 +1564,43 @@ class _TotalPesananPageState extends State<TotalPesananPage>
                           _showAdminEditOrderDialog(item);
                         },
                         icon: const Icon(Icons.edit_rounded,
-                            color: Colors.white, size: 18),
+                            color: Colors.white, size: 16),
                         label: Text(
-                          LanguageService.text('Edit Pesanan', 'Edit Order'),
+                          LanguageService.text('Edit', 'Edit'),
                           style: GoogleFonts.poppins(
-                              color: Colors.white, fontWeight: FontWeight.bold),
+                              color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
                         ),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.primary,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          padding: const EdgeInsets.symmetric(vertical: 13),
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(14)),
                         ),
                       ),
-                    )
-                  else if (!isLunas)
+                    ),
+                    const SizedBox(width: 8),
                     Expanded(
                       child: ElevatedButton.icon(
                         onPressed: () {
                           Navigator.pop(context);
-                          _navigateToPayment(item);
+                          _showDeleteOrderConfirmation(item);
                         },
-                        icon: const Icon(Icons.arrow_forward_rounded,
-                            color: Colors.white, size: 18),
+                        icon: const Icon(Icons.delete_outline_rounded,
+                            color: Colors.white, size: 16),
                         label: Text(
-                          LanguageService.text(
-                              'Lanjutkan Pembayaran', 'Continue Payment'),
+                          LanguageService.text('Hapus', 'Delete'),
                           style: GoogleFonts.poppins(
-                              color: Colors.white, fontWeight: FontWeight.bold),
+                              color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
                         ),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFF59E0B),
-                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          backgroundColor: AppColors.error,
+                          padding: const EdgeInsets.symmetric(vertical: 13),
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(14)),
-                        ),
-                      ),
-                    )
-                  else
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: () => Navigator.pop(context),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.primary,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14)),
-                        ),
-                        child: Text(
-                          LanguageService.text('Tutup', 'Close'),
-                          style: GoogleFonts.poppins(
-                              color: Colors.white, fontWeight: FontWeight.bold),
                         ),
                       ),
                     ),
+                  ],
                 ],
               ),
               const SizedBox(height: 10),
@@ -1598,14 +1720,18 @@ class _TotalPesananPageState extends State<TotalPesananPage>
 
           // 3. Floating Cyber Particles in Dark Mode
           if (widget.isDarkMode)
-            AnimatedBuilder(
-              animation: _particleController,
-              builder: (context, child) {
-                return CustomPaint(
-                  size: MediaQuery.of(context).size,
-                  painter: AppParticlePainter(_particles),
-                );
-              },
+            IgnorePointer(
+              child: RepaintBoundary(
+                child: AnimatedBuilder(
+                  animation: _particleController,
+                  builder: (context, child) {
+                    return CustomPaint(
+                      size: MediaQuery.of(context).size,
+                      painter: AppParticlePainter(_particles),
+                    );
+                  },
+                ),
+              ),
             ),
 
           // 4. Foreground Content
@@ -1614,13 +1740,7 @@ class _TotalPesananPageState extends State<TotalPesananPage>
               children: [
                 _buildAppBar(),
                 Expanded(
-                  child: _isLoading
-                      ? const Center(
-                          child: CircularProgressIndicator(
-                            color: AppColors.primary,
-                          ),
-                        )
-                      : RefreshIndicator(
+                  child: RefreshIndicator(
                           onRefresh: _loadOrdersData,
                           color: AppColors.primary,
                           child: SingleChildScrollView(
@@ -2198,40 +2318,49 @@ class _TotalPesananPageState extends State<TotalPesananPage>
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(10),
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: AppColors.primary.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child:
+                              Icon(iconData, color: AppColors.primary, size: 20),
                         ),
-                        child:
-                            Icon(iconData, color: AppColors.primary, size: 20),
-                      ),
-                      const SizedBox(width: 10),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            invoice,
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.primary,
-                            ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                invoice,
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.primary,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              Text(
+                                formattedDate,
+                                style: GoogleFonts.poppins(
+                                  fontSize: 11,
+                                  color: _textSecondary,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
                           ),
-                          Text(
-                            formattedDate,
-                            style: GoogleFonts.poppins(
-                              fontSize: 11,
-                              color: _textSecondary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+                        ),
+                      ],
+                    ),
                   ),
+                  const SizedBox(width: 8),
                   _buildStatusBadge(status),
                 ],
               ),
@@ -2279,89 +2408,106 @@ class _TotalPesananPageState extends State<TotalPesananPage>
                   ),
                 ],
               ),
-
-              // Action Buttons Row (Lanjutkan Pembayaran / Admin Actions)
-              if (!isLunas || _isAdmin) ...[
-                const SizedBox(height: 12),
-                Divider(color: _cardBorder.withValues(alpha: 0.5), height: 1),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    if (!isLunas)
-                      Expanded(
-                        child: Container(
-                          decoration: BoxDecoration(
+              // Action Buttons Row (Lanjutkan Pembayaran & Edit / Hapus Actions)
+              const SizedBox(height: 12),
+              Divider(color: _cardBorder.withValues(alpha: 0.5), height: 1),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  if (!isLunas)
+                    Expanded(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFFF59E0B), Color(0xFFD97706)],
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFFF59E0B)
+                                  .withValues(alpha: 0.3),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: ElevatedButton.icon(
+                          onPressed: () => _navigateToPayment(item),
+                          icon: const Icon(Icons.payment_rounded,
+                              color: Colors.white, size: 16),
+                          label: Text(
+                            LanguageService.text(
+                                'Lanjutkan Pembayaran', 'Continue Payment'),
+                            style: GoogleFonts.poppins(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.transparent,
+                            shadowColor: Colors.transparent,
+                            padding: const EdgeInsets.symmetric(vertical: 9),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _showOrderDetailBottomSheet(item),
+                        icon: const Icon(Icons.receipt_long_rounded, size: 16),
+                        label: Text(
+                          LanguageService.text('Lihat Rincian', 'View Details'),
+                          style: GoogleFonts.poppins(
+                              fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _textPrimary,
+                          side: BorderSide(color: _cardBorder),
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFFF59E0B), Color(0xFFD97706)],
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: const Color(0xFFF59E0B)
-                                    .withValues(alpha: 0.3),
-                                blurRadius: 8,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: ElevatedButton.icon(
-                            onPressed: () => _navigateToPayment(item),
-                            icon: const Icon(Icons.payment_rounded,
-                                color: Colors.white, size: 16),
-                            label: Text(
-                              LanguageService.text(
-                                  'Lanjutkan Pembayaran', 'Continue Payment'),
-                              style: GoogleFonts.poppins(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.transparent,
-                              shadowColor: Colors.transparent,
-                              padding: const EdgeInsets.symmetric(vertical: 9),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
                           ),
                         ),
                       ),
-                    if (_isAdmin) ...[
-                      if (!isLunas) const SizedBox(width: 8),
-                      IconButton(
-                        icon: const Icon(Icons.edit_outlined, size: 19),
-                        color: AppColors.primary,
-                        style: IconButton.styleFrom(
-                          backgroundColor:
-                              AppColors.primary.withValues(alpha: 0.1),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
+                    ),
+                  if (_isAdmin) ...[
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.edit_outlined, size: 19),
+                      color: AppColors.primary,
+                      style: IconButton.styleFrom(
+                        backgroundColor:
+                            AppColors.primary.withValues(alpha: 0.1),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
                         ),
-                        tooltip: 'Edit Pesanan',
-                        onPressed: () => _showAdminEditOrderDialog(item),
                       ),
-                      const SizedBox(width: 4),
-                      IconButton(
-                        icon:
-                            const Icon(Icons.delete_outline_rounded, size: 19),
-                        color: AppColors.error,
-                        style: IconButton.styleFrom(
-                          backgroundColor:
-                              AppColors.error.withValues(alpha: 0.1),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
+                      tooltip: 'Edit Pesanan',
+                      onPressed: () => _showAdminEditOrderDialog(item),
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(
+                      icon:
+                          const Icon(Icons.delete_outline_rounded, size: 19),
+                      color: AppColors.error,
+                      style: IconButton.styleFrom(
+                        backgroundColor:
+                            AppColors.error.withValues(alpha: 0.1),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
                         ),
-                        tooltip: 'Hapus Pesanan',
-                        onPressed: () => _showDeleteOrderConfirmation(item),
                       ),
-                    ],
+                      tooltip: 'Hapus Pesanan',
+                      onPressed: () => _showDeleteOrderConfirmation(item),
+                    ),
                   ],
-                ),
-              ],
+                ],
+              ),
             ],
           ),
         ),

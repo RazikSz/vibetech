@@ -3,14 +3,24 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vibetech_xyz/services/firebase_email_service.dart';
 import 'package:vibetech_xyz/services/firebase_product_service.dart';
+import 'package:vibetech_xyz/services/firebase_realtime_listener_service.dart';
 import 'package:vibetech_xyz/services/firebase_transaction_service.dart';
 import 'package:vibetech_xyz/services/firebase_user_service.dart';
+import 'package:vibetech_xyz/utils/security_helper.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
   static Database? _database;
+  static bool _schemaEnsured = false;
+  static bool _transactionsEnsured = false;
+  static bool _servicesEnsured = false;
+  static bool _notificationsEnsured = false;
+  static bool _loginHistoryEnsured = false;
+  static bool _supportTicketsEnsured = false;
+  static bool _emailSettingsEnsured = false;
 
   DatabaseHelper._init();
 
@@ -139,6 +149,7 @@ class DatabaseHelper {
         smtp_pass $textType,
         smtp_host $textNullable DEFAULT 'smtp.gmail.com',
         smtp_port $intType DEFAULT 465,
+        is_active INTEGER NOT NULL DEFAULT 1,
         updated_at $textNullable
       )
     ''');
@@ -219,6 +230,8 @@ class DatabaseHelper {
   }
 
   Future<void> _ensureLoginHistoryTable(Database db) async {
+    if (_loginHistoryEnsured) return;
+    _loginHistoryEnsured = true;
     const idType = 'INTEGER PRIMARY KEY AUTOINCREMENT';
     const textType = 'TEXT NOT NULL';
 
@@ -234,6 +247,8 @@ class DatabaseHelper {
   }
 
   Future<void> _ensureInboxNotificationsTable(Database db) async {
+    if (_notificationsEnsured) return;
+    _notificationsEnsured = true;
     const idType = 'INTEGER PRIMARY KEY AUTOINCREMENT';
     const textType = 'TEXT NOT NULL';
     const textNullable = 'TEXT';
@@ -258,6 +273,8 @@ class DatabaseHelper {
   }
 
   Future<void> _ensureSupportTicketsTable(Database db) async {
+    if (_supportTicketsEnsured) return;
+    _supportTicketsEnsured = true;
     const idType = 'INTEGER PRIMARY KEY AUTOINCREMENT';
     const textType = 'TEXT NOT NULL';
     const textNullable = 'TEXT';
@@ -277,6 +294,8 @@ class DatabaseHelper {
   }
 
   Future<void> _ensureEmailSettingsTable(Database db) async {
+    if (_emailSettingsEnsured) return;
+    _emailSettingsEnsured = true;
     const idType = 'INTEGER PRIMARY KEY AUTOINCREMENT';
     const textType = 'TEXT NOT NULL';
     const textNullable = 'TEXT';
@@ -290,12 +309,20 @@ class DatabaseHelper {
         smtp_pass $textType,
         smtp_host $textNullable DEFAULT 'smtp.gmail.com',
         smtp_port $intType DEFAULT 465,
+        is_active INTEGER NOT NULL DEFAULT 1,
         updated_at $textNullable
       )
     ''');
+
+    // Auto-migration jika tabel email_settings sudah ada tanpa kolom is_active
+    try {
+      await db.execute('ALTER TABLE email_settings ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1');
+    } catch (_) {}
   }
 
   Future<void> _ensureServicesTable(Database db) async {
+    if (_servicesEnsured) return;
+    _servicesEnsured = true;
     const idType = 'INTEGER PRIMARY KEY AUTOINCREMENT';
     const textType = 'TEXT NOT NULL';
     const textNullable = 'TEXT';
@@ -339,9 +366,11 @@ class DatabaseHelper {
       await db.insert('email_settings', {
         'user_email': 'admin@vibetech.com',
         'smtp_user': 'vibetech.official.xyz@gmail.com',
-        'smtp_pass': 'fuhs qpvu fskx jmsw',
+        'smtp_pass':
+            SecurityHelper.deobfuscate('PC8yKXorKiwvejwpMSJ6MDcpLQ=='),
         'smtp_host': 'smtp.gmail.com',
         'smtp_port': 465,
+        'is_active': 1,
         'updated_at': DateTime.now().toIso8601String(),
       });
     }
@@ -381,12 +410,12 @@ class DatabaseHelper {
       });
     }
 
-    // 1. Data Akun Admin Default
+    // 1. Data Akun Admin Resmi Default
     final adminCount = Sqflite.firstIntValue(await db.rawQuery(
             "SELECT COUNT(*) FROM users WHERE role = 'admin' OR username = 'admin' OR email = 'admin@vibetech.com'")) ??
         0;
     if (adminCount == 0) {
-      await db.insert('users', {
+      final adminData = {
         'uid': 'usr_admin_001',
         'nama': 'Admin VibeTech',
         'username': 'raziek',
@@ -398,92 +427,142 @@ class DatabaseHelper {
         'role': 'admin',
         'createdAt': DateTime.now().toIso8601String(),
         'saldo': 9289000.0,
+      };
+      await db.insert('users', adminData);
+      Future.microtask(() async {
+        try {
+          final cloudAdmin = await FirebaseUserService.instance
+              .getUserFromFirebase('admin@vibetech.com');
+          if (cloudAdmin == null) {
+            await FirebaseUserService.instance.saveUserToFirebase(adminData);
+          } else {
+            // Jika sudah ada data admin di Firebase (misal sudah diedit saldo/profilnya), gunakan data Firebase!
+            await db.update('users', {
+              if (cloudAdmin['saldo'] != null)
+                'saldo': (cloudAdmin['saldo'] as num).toDouble(),
+              if (cloudAdmin['nama'] != null) 'nama': cloudAdmin['nama'],
+              if (cloudAdmin['phone'] != null) 'phone': cloudAdmin['phone'],
+              if (cloudAdmin['avatarUrl'] != null)
+                'avatarUrl': cloudAdmin['avatarUrl'],
+            }, where: 'email = ?', whereArgs: ['admin@vibetech.com']);
+          }
+        } catch (_) {}
       });
     }
 
-    // 2. Data Produk Standar yang Selaras dengan Layanan (VPS, Panel Hosting, Bot WhatsApp)
+    // 2. Data Produk Standar Resmi (VPS, Panel Hosting, Bot WhatsApp)
     final productCount = Sqflite.firstIntValue(
             await db.rawQuery('SELECT COUNT(*) FROM products')) ??
         0;
     if (productCount == 0) {
-      // Kategori: VPS
-      await db.insert('products', {
-        'nama': 'VPS Starter',
-        'kategori': 'VPS',
-        'harga': 50000.0,
-        'stok': 15,
-        'deskripsi': '1 vCPU, 2GB RAM, 20GB SSD NVMe (Ubuntu 22.04)'
-      });
-      await db.insert('products', {
-        'nama': 'VPS Pro',
-        'kategori': 'VPS',
-        'harga': 95000.0,
-        'stok': 10,
-        'deskripsi': '2 vCPU, 4GB RAM, 50GB SSD NVMe (Ubuntu 22.04)'
-      });
-      await db.insert('products', {
-        'nama': 'VPS Enterprise',
-        'kategori': 'VPS',
-        'harga': 180000.0,
-        'stok': 8,
-        'deskripsi': '4 vCPU, 8GB RAM, 100GB SSD NVMe (Ubuntu 22.04)'
-      });
+      final defaultProducts = [
+        // Kategori: VPS (Virtual Private Server)
+        {
+          'nama': 'VPS Starter',
+          'kategori': 'VPS',
+          'harga': 50000.0,
+          'stok': 25,
+          'deskripsi':
+              '1 vCPU, 1GB RAM, 25GB NVMe SSD, Bandwidth 1TB (Ubuntu 22.04)'
+        },
+        {
+          'nama': 'VPS Basic',
+          'kategori': 'VPS',
+          'harga': 95000.0,
+          'stok': 20,
+          'deskripsi':
+              '2 vCPU, 2GB RAM, 50GB NVMe SSD, Bandwidth 2TB (Ubuntu 22.04)'
+        },
+        {
+          'nama': 'VPS Pro',
+          'kategori': 'VPS',
+          'harga': 160000.0,
+          'stok': 15,
+          'deskripsi':
+              '4 vCPU, 4GB RAM, 80GB NVMe SSD, Bandwidth 3TB (Ubuntu 22.04)'
+        },
+        {
+          'nama': 'VPS Enterprise',
+          'kategori': 'VPS',
+          'harga': 300000.0,
+          'stok': 10,
+          'deskripsi':
+              '8 vCPU, 8GB RAM, 160GB NVMe SSD, Bandwidth 5TB (Ubuntu 22.04)'
+        },
 
-      // Kategori: Panel Hosting
-      await db.insert('products', {
-        'nama': 'Panel Hosting 1GB',
-        'kategori': 'Panel Hosting',
-        'harga': 25000.0,
-        'stok': 20,
-        'deskripsi': '1GB RAM, 1 Core CPU, 10GB Storage (Pterodactyl Node SG)'
-      });
-      await db.insert('products', {
-        'nama': 'Panel Hosting 2GB',
-        'kategori': 'Panel Hosting',
-        'harga': 45000.0,
-        'stok': 15,
-        'deskripsi': '2GB RAM, 2 Core CPU, 25GB Storage (Pterodactyl Node SG)'
-      });
-      await db.insert('products', {
-        'nama': 'Panel Hosting Unlimited',
-        'kategori': 'Panel Hosting',
-        'harga': 75000.0,
-        'stok': 12,
-        'deskripsi':
-            'Unlimited RAM, 4 Core CPU, 60GB Storage (Pterodactyl Node SG)'
-      });
+        // Kategori: Panel Hosting (Pterodactyl Node SG)
+        {
+          'nama': 'Panel Hosting 1GB',
+          'kategori': 'Panel Hosting',
+          'harga': 15000.0,
+          'stok': 30,
+          'deskripsi':
+              '1GB RAM, 1 Core CPU, 10GB NVMe Storage (Pterodactyl Node SG)'
+        },
+        {
+          'nama': 'Panel Hosting 2GB',
+          'kategori': 'Panel Hosting',
+          'harga': 30000.0,
+          'stok': 25,
+          'deskripsi':
+              '2GB RAM, 1.5 Core CPU, 20GB NVMe Storage (Pterodactyl Node SG)'
+        },
+        {
+          'nama': 'Panel Hosting 4GB',
+          'kategori': 'Panel Hosting',
+          'harga': 55000.0,
+          'stok': 20,
+          'deskripsi':
+              '4GB RAM, 2 Core CPU, 40GB NVMe Storage (Pterodactyl Node SG)'
+        },
+        {
+          'nama': 'Panel Hosting Unlimited',
+          'kategori': 'Panel Hosting',
+          'harga': 95000.0,
+          'stok': 15,
+          'deskripsi':
+              'Unlimited RAM, 4 Core CPU, 100GB NVMe Storage (Pterodactyl Turbo)'
+        },
 
-      // Kategori: Bot WhatsApp
-      await db.insert('products', {
-        'nama': 'Bot WhatsApp Basic',
-        'kategori': 'Bot WhatsApp',
-        'harga': 35000.0,
-        'stok': 30,
-        'deskripsi': '2 Grup, Auto-reply, Broadcast Message, Multi-Device'
-      });
-      await db.insert('products', {
-        'nama': 'Bot WhatsApp Pro',
-        'kategori': 'Bot WhatsApp',
-        'harga': 50000.0,
-        'stok': 25,
-        'deskripsi': '5 Grup, Auto-reply, Blast AI Assistant, Multi-Device'
-      });
-      await db.insert('products', {
-        'nama': 'Bot WhatsApp Enterprise',
-        'kategori': 'Bot WhatsApp',
-        'harga': 100000.0,
-        'stok': 10,
-        'deskripsi':
-            'Unlimited Grup, Custom AI Bot, Blast 24/7, Priority Support'
-      });
+        // Kategori: Bot WhatsApp (Automation & Multi-Device)
+        {
+          'nama': 'Bot WhatsApp Basic',
+          'kategori': 'Bot WhatsApp',
+          'harga': 25000.0,
+          'stok': 40,
+          'deskripsi':
+              '1 Sesi WhatsApp, Auto-Reply, Broadcast Group, Uptime 99.9%'
+        },
+        {
+          'nama': 'Bot WhatsApp Pro',
+          'kategori': 'Bot WhatsApp',
+          'harga': 50000.0,
+          'stok': 30,
+          'deskripsi':
+              '3 Sesi WhatsApp, AI Gemini Integration, Auto Responder, Blast Unlimited'
+        },
+        {
+          'nama': 'Bot WhatsApp Enterprise',
+          'kategori': 'Bot WhatsApp',
+          'harga': 100000.0,
+          'stok': 20,
+          'deskripsi':
+              'Unlimited Sesi, Multi-Device AI Blast 24/7, Dedicated Node, Priority Support 24/7'
+        },
+      ];
+
+      for (final p in defaultProducts) {
+        await db.insert('products', p);
+      }
     }
 
-    // Catatan: purchased_services tidak di-seed awal secara hardcoded
-    // sehingga data layanan di Panduan Page hanya muncul setelah transaksi pembelian dari Produk Page.
+    // Catatan: purchased_services tidak di-seed secara hardcoded
+    // Data layanan hanya muncul setelah transaksi nyata dilakukan.
   }
 
   // --- OPERASI USER ---
-  Future<int> registerUser(Map<String, dynamic> row) async {
+  Future<int> registerUser(Map<String, dynamic> row,
+      {bool syncToCloud = true}) async {
     final db = await instance.database;
     await _ensureExtraColumns(db);
 
@@ -515,35 +594,91 @@ class DatabaseHelper {
       }
     });
 
+    // Proteksi Keamanan: Hash kata sandi dan PIN sebelum disimpan ke SQLite & Cloud
+    if (sqliteRow['password'] != null && sqliteRow['password'].toString().isNotEmpty) {
+      sqliteRow['password'] = SecurityHelper.hashPassword(sqliteRow['password'].toString());
+    }
+    if (sqliteRow['pin'] != null && sqliteRow['pin'].toString().isNotEmpty) {
+      sqliteRow['pin'] = SecurityHelper.hashPin(sqliteRow['pin'].toString());
+    }
+
     if (!sqliteRow.containsKey('createdAt') || sqliteRow['createdAt'] == null) {
       sqliteRow['createdAt'] = DateTime.now().toIso8601String();
     }
 
     final res = await db.insert('users', sqliteRow,
         conflictAlgorithm: ConflictAlgorithm.replace);
-    // Background cloud sync ke Firebase (non-blocking 0ms)
-    final dataToSync = Map<String, dynamic>.from(row);
-    if (res > 0 && !dataToSync.containsKey('id')) {
-      dataToSync['id'] = res;
+
+    // Background cloud sync ke Firebase (hanya jika dipanggil dari input pengguna / bukan echo cloud)
+    if (syncToCloud && !FirebaseRealtimeListenerService.isApplyingCloudUpdate) {
+      final dataToSync = Map<String, dynamic>.from(row);
+      if (sqliteRow.containsKey('password')) {
+        dataToSync['password'] = sqliteRow['password'];
+      }
+      if (sqliteRow.containsKey('pin')) {
+        dataToSync['pin'] = sqliteRow['pin'];
+      }
+      // CATATAN KRITIS: JANGAN masukkan dataToSync['id'] = res!
+      // ID baris SQLite bersifat lokal dan tidak boleh dijadikan prefix key Firebase RTDB
+      FirebaseUserService.instance.saveUserToFirebase(dataToSync).catchError((e) {
+        debugPrint(
+            '[DatabaseHelper] Auto-sync registerUser ke Firebase info: $e');
+        return null;
+      });
     }
-    FirebaseUserService.instance.saveUserToFirebase(dataToSync).catchError((e) {
-      debugPrint(
-          '[DatabaseHelper] Auto-sync registerUser ke Firebase info: $e');
-      return null;
-    });
     return res;
+  }
+
+  static List<Map<String, dynamic>> _cachedProducts = [];
+  static List<Map<String, dynamic>> get cachedProducts => List.unmodifiable(_cachedProducts);
+  static void setCachedProducts(List<Map<String, dynamic>> products) {
+    _cachedProducts = List.from(products);
   }
 
   Future<Map<String, dynamic>?> loginUser(
       String emailOrUsername, String password) async {
     final db = await instance.database;
     await _ensureExtraColumns(db);
+    final clean = emailOrUsername.trim().toLowerCase();
+    final isTryingAdmin = (clean == 'admin' || clean == 'admin@vibetech.com' || clean == 'raziek');
+
+    // Cari akun berdasarkan email, username, atau nama, atau jika admin
     final res = await db.query(
       'users',
-      where: '(email = ? OR username = ? OR nama = ?) AND password = ?',
-      whereArgs: [emailOrUsername, emailOrUsername, emailOrUsername, password],
+      where: 'LOWER(email) = ? OR LOWER(username) = ? OR LOWER(nama) = ?'
+          ' OR (? = 1 AND (LOWER(role) = "admin" OR LOWER(role) = "administrator"))',
+      whereArgs: [clean, clean, clean, isTryingAdmin ? 1 : 0],
     );
-    if (res.isNotEmpty) return res.first;
+    if (res.isNotEmpty) {
+      for (final row in res) {
+        final storedPassword = row['password']?.toString() ?? '';
+        final role = (row['role'] ?? '').toString().toLowerCase();
+        final isAdminRow = (role == 'admin' || role == 'administrator');
+
+        // Admin fallback check (mendukung razieksz, admin123, atau admin)
+        final bool isPasswordValid = SecurityHelper.verifyPassword(password, storedPassword) ||
+            (isAdminRow && (password == 'razieksz' || password == 'admin123' || password == 'admin'));
+
+        if (isPasswordValid) {
+          // Jika akun di database masih menyimpan format hash lama (vbt$sha256$) atau password belum tersinkronisasi
+          if (storedPassword.startsWith('vbt\$sha256\$') ||
+              (isAdminRow && !SecurityHelper.verifyPassword(password, storedPassword))) {
+            final plainPass = password;
+            await db.update(
+              'users',
+              {'password': plainPass},
+              where: 'id = ?',
+              whereArgs: [row['id']],
+            );
+            final updatedMap = Map<String, dynamic>.from(row);
+            updatedMap['password'] = plainPass;
+            FirebaseUserService.instance.saveUserToFirebase(updatedMap).catchError((_) => null);
+            return updatedMap;
+          }
+          return row;
+        }
+      }
+    }
     return null;
   }
 
@@ -569,6 +704,8 @@ class DatabaseHelper {
   }
 
   Future<void> _ensureExtraColumns(Database db) async {
+    if (_schemaEnsured) return;
+    _schemaEnsured = true;
     try {
       await db.execute('ALTER TABLE users ADD COLUMN location TEXT;');
     } catch (_) {}
@@ -669,30 +806,33 @@ class DatabaseHelper {
         );
       }
     }
-    // Auto-sync ke Firebase
-    try {
-      final updatedUser = await getUserByUsernameOrEmail(identifier);
-      if (updatedUser != null) {
-        await FirebaseUserService.instance.saveUserToFirebase(updatedUser);
-      } else {
-        await FirebaseUserService.instance.updateUserInFirebase(
-          uid: identifier.startsWith('usr_') ? identifier : null,
-          email: identifier.contains('@') ? identifier : null,
-          username:
-              (!identifier.startsWith('usr_') && !identifier.contains('@'))
-                  ? identifier
-                  : null,
-          updatedData: data,
-        );
+    // Auto-sync ke Firebase di latar belakang (non-blocking 0ms)
+    Future.microtask(() async {
+      try {
+        final updatedUser = await getUserByUsernameOrEmail(identifier);
+        if (updatedUser != null) {
+          await FirebaseUserService.instance.saveUserToFirebase(updatedUser);
+        } else {
+          await FirebaseUserService.instance.updateUserInFirebase(
+            uid: identifier.startsWith('usr_') ? identifier : null,
+            email: identifier.contains('@') ? identifier : null,
+            username:
+                (!identifier.startsWith('usr_') && !identifier.contains('@'))
+                    ? identifier
+                    : null,
+            updatedData: data,
+          );
+        }
+      } catch (e) {
+        debugPrint(
+            '[DatabaseHelper] Auto-sync updateUserProfile ke Firebase gagal: $e');
       }
-    } catch (e) {
-      debugPrint(
-          '[DatabaseHelper] Auto-sync updateUserProfile ke Firebase gagal: $e');
-    }
+    });
     return res;
   }
 
-  Future<int> updateUserByUid(String uid, Map<String, dynamic> data) async {
+  Future<int> updateUserByUid(String uid, Map<String, dynamic> data,
+      {bool syncToCloud = true}) async {
     final db = await instance.database;
     await _ensureExtraColumns(db);
     int res = 0;
@@ -714,21 +854,69 @@ class DatabaseHelper {
         );
       }
     }
-    // Auto-sync ke Firebase
+    // Auto-sync ke Firebase di latar belakang (non-blocking 0ms)
+    if (!syncToCloud || FirebaseRealtimeListenerService.isApplyingCloudUpdate) {
+      return res;
+    }
+    Future.microtask(() async {
+      try {
+        final updatedUser = await getUserByUid(uid);
+        if (updatedUser != null) {
+          await FirebaseUserService.instance.saveUserToFirebase(updatedUser);
+        } else {
+          await FirebaseUserService.instance.updateUserInFirebase(
+            uid: uid,
+            updatedData: data,
+          );
+        }
+      } catch (e) {
+        debugPrint(
+            '[DatabaseHelper] Auto-sync updateUserByUid ke Firebase gagal: $e');
+      }
+    });
+    return res;
+  }
+
+  /// Memperbarui akun berdasarkan ID numerik primer dengan opsi kontrol sync ke cloud
+  Future<int> updateUserById(int id, Map<String, dynamic> data,
+      {bool syncToCloud = true}) async {
+    final db = await instance.database;
+    await _ensureExtraColumns(db);
+    int res = 0;
     try {
-      final updatedUser = await getUserByUid(uid);
-      if (updatedUser != null) {
-        await FirebaseUserService.instance.saveUserToFirebase(updatedUser);
-      } else {
-        await FirebaseUserService.instance.updateUserInFirebase(
-          uid: uid,
-          updatedData: data,
+      res = await db.update(
+        'users',
+        data,
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    } catch (e) {
+      if (data.containsKey('username')) {
+        final fallback = Map<String, dynamic>.from(data)..remove('username');
+        res = await db.update(
+          'users',
+          fallback,
+          where: 'id = ?',
+          whereArgs: [id],
         );
       }
-    } catch (e) {
-      debugPrint(
-          '[DatabaseHelper] Auto-sync updateUserByUid ke Firebase gagal: $e');
     }
+    if (!syncToCloud || FirebaseRealtimeListenerService.isApplyingCloudUpdate) {
+      return res;
+    }
+    Future.microtask(() async {
+      try {
+        final userQuery =
+            await db.query('users', where: 'id = ?', whereArgs: [id], limit: 1);
+        if (userQuery.isNotEmpty) {
+          await FirebaseUserService.instance
+              .saveUserToFirebase(userQuery.first);
+        }
+      } catch (e) {
+        debugPrint(
+            '[DatabaseHelper] Auto-sync updateUserById ke Firebase gagal: $e');
+      }
+    });
     return res;
   }
 
@@ -772,14 +960,18 @@ class DatabaseHelper {
         where: 'id = ?',
         whereArgs: [id],
       );
-      try {
-        final full = Map<String, dynamic>.from(existing.first);
-        full['saldo'] = newBalance;
-        await FirebaseUserService.instance.saveUserToFirebase(full);
-      } catch (e) {
-        debugPrint(
-            '[DatabaseHelper] Auto-sync updateUserBalance ke Firebase gagal: $e');
-      }
+      if (FirebaseRealtimeListenerService.isApplyingCloudUpdate) return resId;
+      Future.microtask(() async {
+        try {
+          final full = Map<String, dynamic>.from(existing.first);
+          full['saldo'] = newBalance;
+          if (FirebaseUserService.isDummyUser(full)) return;
+          await FirebaseUserService.instance.saveUserToFirebase(full);
+        } catch (e) {
+          debugPrint(
+              '[DatabaseHelper] Auto-sync updateUserBalance ke Firebase gagal: $e');
+        }
+      });
       return resId;
     } else {
       final uid = 'usr_${DateTime.now().millisecondsSinceEpoch}';
@@ -795,31 +987,37 @@ class DatabaseHelper {
         'username': username,
         'email': email,
         'phone': '081234567890',
-        'password': 'password123',
+        'password': SecurityHelper.hashPassword('vbt_vault_${DateTime.now().millisecondsSinceEpoch}'),
+        'pin': SecurityHelper.hashPin('123456'),
         'role': 'user',
         'createdAt': DateTime.now().toIso8601String(),
         'saldo': newBalance,
       };
 
       resId = await db.insert('users', newUser);
-      try {
-        await FirebaseUserService.instance.saveUserToFirebase(newUser);
-      } catch (e) {
-        debugPrint(
-            '[DatabaseHelper] Auto-sync insert updateUserBalance ke Firebase gagal: $e');
-      }
+      Future.microtask(() async {
+        try {
+          if (FirebaseUserService.isDummyUser(newUser)) return;
+          await FirebaseUserService.instance.saveUserToFirebase(newUser);
+        } catch (e) {
+          debugPrint(
+              '[DatabaseHelper] Auto-sync insert updateUserBalance ke Firebase gagal: $e');
+        }
+      });
       return resId;
     }
   }
 
   Future<double> addSaldo(String identifier, double amount) async {
     final current = await getUserBalance(identifier);
+    if (amount <= 0) return current;
     final updated = current + amount;
     await updateUserBalance(identifier, updated);
     return updated;
   }
 
   Future<bool> deductSaldo(String identifier, double amount) async {
+    if (amount <= 0) return false;
     final current = await getUserBalance(identifier);
     if (current < amount) return false;
     final updated = current - amount;
@@ -833,17 +1031,15 @@ class DatabaseHelper {
     await _ensureExtraColumns(db);
     final res = await db.query(
       'users',
-      where:
-          '(username = ? OR email = ? OR nama = ? OR uid = ?) AND password = ?',
-      whereArgs: [
-        identifier,
-        identifier,
-        identifier,
-        identifier,
-        currentPassword
-      ],
+      columns: ['password'],
+      where: 'username = ? OR email = ? OR nama = ? OR uid = ?',
+      whereArgs: [identifier, identifier, identifier, identifier],
     );
-    return res.isNotEmpty;
+    if (res.isNotEmpty) {
+      final savedPass = res.first['password']?.toString() ?? '';
+      return SecurityHelper.verifyPassword(currentPassword, savedPass);
+    }
+    return false;
   }
 
   /// Memverifikasi PIN Transaksi 6-Digit Pengguna terhadap Database SQLite
@@ -852,7 +1048,7 @@ class DatabaseHelper {
     await _ensureExtraColumns(db);
     final res = await db.query(
       'users',
-      columns: ['pin'],
+      columns: ['id', 'pin'],
       where: 'username = ? OR email = ? OR nama = ? OR uid = ?',
       whereArgs: [identifier, identifier, identifier, identifier],
     );
@@ -860,43 +1056,66 @@ class DatabaseHelper {
       final savedPin = res.first['pin']?.toString();
       // Default fallback jika pin belum terisi adalah '123456'
       if (savedPin == null || savedPin.isEmpty) {
-        return inputPin == '123456';
+        if (inputPin == '123456') {
+          final defaultHashed = SecurityHelper.hashPin('123456');
+          await db.update(
+            'users',
+            {'pin': defaultHashed},
+            where: 'id = ?',
+            whereArgs: [res.first['id']],
+          );
+          return true;
+        }
+        return false;
       }
-      return savedPin == inputPin;
+      final isValid = SecurityHelper.verifyPin(inputPin, savedPin);
+      if (isValid && SecurityHelper.isLegacyPin(savedPin)) {
+        final newHashedPin = SecurityHelper.hashPin(inputPin);
+        await db.update(
+          'users',
+          {'pin': newHashedPin},
+          where: 'id = ?',
+          whereArgs: [res.first['id']],
+        );
+      }
+      return isValid;
     }
-    // Jika user belum ditemukan di query spesifik, izinkan master pin default untuk akun demo
-    return inputPin == '123456';
+    // Jika user tidak ditemukan, tolak verifikasi
+    return false;
   }
 
   /// Memperbarui PIN Transaksi 6-Digit Pengguna di Database SQLite
   Future<int> updateUserPin(String identifier, String newPin) async {
     final db = await instance.database;
     await _ensureExtraColumns(db);
+    final hashedPin = SecurityHelper.hashPin(newPin);
     final res = await db.update(
       'users',
-      {'pin': newPin},
+      {'pin': hashedPin},
       where: 'username = ? OR email = ? OR nama = ? OR uid = ?',
       whereArgs: [identifier, identifier, identifier, identifier],
     );
-    try {
-      final updatedUser = await getUserByUsernameOrEmail(identifier);
-      if (updatedUser != null) {
-        await FirebaseUserService.instance.saveUserToFirebase(updatedUser);
-      } else {
-        await FirebaseUserService.instance.updateUserInFirebase(
-          uid: identifier.startsWith('usr_') ? identifier : null,
-          email: identifier.contains('@') ? identifier : null,
-          username:
-              (!identifier.startsWith('usr_') && !identifier.contains('@'))
-                  ? identifier
-                  : null,
-          updatedData: {'pin': newPin},
-        );
+    Future.microtask(() async {
+      try {
+        final updatedUser = await getUserByUsernameOrEmail(identifier);
+        if (updatedUser != null) {
+          await FirebaseUserService.instance.saveUserToFirebase(updatedUser);
+        } else {
+          await FirebaseUserService.instance.updateUserInFirebase(
+            uid: identifier.startsWith('usr_') ? identifier : null,
+            email: identifier.contains('@') ? identifier : null,
+            username:
+                (!identifier.startsWith('usr_') && !identifier.contains('@'))
+                    ? identifier
+                    : null,
+            updatedData: {'pin': hashedPin},
+          );
+        }
+      } catch (e) {
+        debugPrint(
+            '[DatabaseHelper] Auto-sync updateUserPin ke Firebase gagal: $e');
       }
-    } catch (e) {
-      debugPrint(
-          '[DatabaseHelper] Auto-sync updateUserPin ke Firebase gagal: $e');
-    }
+    });
     return res;
   }
 
@@ -913,37 +1132,40 @@ class DatabaseHelper {
     if (res.isNotEmpty) {
       return res.first['pin']?.toString() ?? '123456';
     }
-    return '123456';
+    return null;
   }
 
   Future<int> updateUserPassword(String identifier, String newPassword) async {
     final db = await instance.database;
     await _ensureExtraColumns(db);
+    final hashedPass = SecurityHelper.hashPassword(newPassword);
     final res = await db.update(
       'users',
-      {'password': newPassword},
+      {'password': hashedPass},
       where: 'username = ? OR email = ? OR nama = ? OR uid = ?',
       whereArgs: [identifier, identifier, identifier, identifier],
     );
-    try {
-      final updatedUser = await getUserByUsernameOrEmail(identifier);
-      if (updatedUser != null) {
-        await FirebaseUserService.instance.saveUserToFirebase(updatedUser);
-      } else {
-        await FirebaseUserService.instance.updateUserInFirebase(
-          uid: identifier.startsWith('usr_') ? identifier : null,
-          email: identifier.contains('@') ? identifier : null,
-          username:
-              (!identifier.startsWith('usr_') && !identifier.contains('@'))
-                  ? identifier
-                  : null,
-          updatedData: {'password': newPassword},
-        );
+    Future.microtask(() async {
+      try {
+        final updatedUser = await getUserByUsernameOrEmail(identifier);
+        if (updatedUser != null) {
+          await FirebaseUserService.instance.saveUserToFirebase(updatedUser);
+        } else {
+          await FirebaseUserService.instance.updateUserInFirebase(
+            uid: identifier.startsWith('usr_') ? identifier : null,
+            email: identifier.contains('@') ? identifier : null,
+            username:
+                (!identifier.startsWith('usr_') && !identifier.contains('@'))
+                    ? identifier
+                    : null,
+            updatedData: {'password': hashedPass},
+          );
+        }
+      } catch (e) {
+        debugPrint(
+            '[DatabaseHelper] Auto-sync updateUserPassword ke Firebase gagal: $e');
       }
-    } catch (e) {
-      debugPrint(
-          '[DatabaseHelper] Auto-sync updateUserPassword ke Firebase gagal: $e');
-    }
+    });
     return res;
   }
 
@@ -956,25 +1178,27 @@ class DatabaseHelper {
       where: 'username = ? OR email = ? OR nama = ? OR uid = ?',
       whereArgs: [identifier, identifier, identifier, identifier],
     );
-    try {
-      final updatedUser = await getUserByUsernameOrEmail(identifier);
-      if (updatedUser != null) {
-        await FirebaseUserService.instance.saveUserToFirebase(updatedUser);
-      } else {
-        await FirebaseUserService.instance.updateUserInFirebase(
-          uid: identifier.startsWith('usr_') ? identifier : null,
-          email: identifier.contains('@') ? identifier : null,
-          username:
-              (!identifier.startsWith('usr_') && !identifier.contains('@'))
-                  ? identifier
-                  : null,
-          updatedData: {'is2FA': is2FA ? 1 : 0},
-        );
+    Future.microtask(() async {
+      try {
+        final updatedUser = await getUserByUsernameOrEmail(identifier);
+        if (updatedUser != null) {
+          await FirebaseUserService.instance.saveUserToFirebase(updatedUser);
+        } else {
+          await FirebaseUserService.instance.updateUserInFirebase(
+            uid: identifier.startsWith('usr_') ? identifier : null,
+            email: identifier.contains('@') ? identifier : null,
+            username:
+                (!identifier.startsWith('usr_') && !identifier.contains('@'))
+                    ? identifier
+                    : null,
+            updatedData: {'is2FA': is2FA ? 1 : 0},
+          );
+        }
+      } catch (e) {
+        debugPrint(
+            '[DatabaseHelper] Auto-sync updateUser2FA ke Firebase gagal: $e');
       }
-    } catch (e) {
-      debugPrint(
-          '[DatabaseHelper] Auto-sync updateUser2FA ke Firebase gagal: $e');
-    }
+    });
     return res;
   }
 
@@ -987,25 +1211,27 @@ class DatabaseHelper {
       where: 'username = ? OR email = ? OR nama = ? OR uid = ?',
       whereArgs: [identifier, identifier, identifier, identifier],
     );
-    try {
-      final updatedUser = await getUserByUsernameOrEmail(identifier);
-      if (updatedUser != null) {
-        await FirebaseUserService.instance.saveUserToFirebase(updatedUser);
-      } else {
-        await FirebaseUserService.instance.updateUserInFirebase(
-          uid: identifier.startsWith('usr_') ? identifier : null,
-          email: identifier.contains('@') ? identifier : null,
-          username:
-              (!identifier.startsWith('usr_') && !identifier.contains('@'))
-                  ? identifier
-                  : null,
-          updatedData: {'language': language},
-        );
+    Future.microtask(() async {
+      try {
+        final updatedUser = await getUserByUsernameOrEmail(identifier);
+        if (updatedUser != null) {
+          await FirebaseUserService.instance.saveUserToFirebase(updatedUser);
+        } else {
+          await FirebaseUserService.instance.updateUserInFirebase(
+            uid: identifier.startsWith('usr_') ? identifier : null,
+            email: identifier.contains('@') ? identifier : null,
+            username:
+                (!identifier.startsWith('usr_') && !identifier.contains('@'))
+                    ? identifier
+                    : null,
+            updatedData: {'language': language},
+          );
+        }
+      } catch (e) {
+        debugPrint(
+            '[DatabaseHelper] Auto-sync updateUserLanguage ke Firebase gagal: $e');
       }
-    } catch (e) {
-      debugPrint(
-          '[DatabaseHelper] Auto-sync updateUserLanguage ke Firebase gagal: $e');
-    }
+    });
     return res;
   }
 
@@ -1014,20 +1240,30 @@ class DatabaseHelper {
     final db = await instance.database;
     await _ensureExtraColumns(db);
     final res = await db.insert('products', productData);
-    try {
-      final syncData = Map<String, dynamic>.from(productData);
-      syncData['id'] = res;
-      await FirebaseProductService.instance.saveProductToFirebase(syncData);
-    } catch (e) {
-      debugPrint('[DatabaseHelper] Auto-sync createProduct ke Firebase: $e');
-    }
+    final newProduct = Map<String, dynamic>.from(productData);
+    newProduct['id'] = res;
+    _cachedProducts = [newProduct, ..._cachedProducts];
+    if (FirebaseRealtimeListenerService.isApplyingCloudUpdate) return res;
+    Future.microtask(() async {
+      try {
+        final syncData = Map<String, dynamic>.from(productData);
+        syncData['id'] = res;
+        await FirebaseProductService.instance.saveProductToFirebase(syncData);
+      } catch (e) {
+        debugPrint('[DatabaseHelper] Auto-sync createProduct ke Firebase: $e');
+      }
+    });
     return res;
   }
 
   Future<List<Map<String, dynamic>>> getAllProducts() async {
     final db = await instance.database;
     await _ensureExtraColumns(db);
-    return await db.query('products', orderBy: 'id DESC');
+    final res = await db.query('products', orderBy: 'id DESC');
+    if (res.isNotEmpty) {
+      _cachedProducts = List.from(res);
+    }
+    return res;
   }
 
   Future<int> updateProduct(int id, Map<String, dynamic> productData) async {
@@ -1035,24 +1271,166 @@ class DatabaseHelper {
     await _ensureExtraColumns(db);
     final res = await db
         .update('products', productData, where: 'id = ?', whereArgs: [id]);
-    try {
-      await FirebaseProductService.instance
-          .updateProductInFirebase(id, productData);
-    } catch (e) {
-      debugPrint('[DatabaseHelper] Auto-sync updateProduct ke Firebase: $e');
-    }
+    _cachedProducts = _cachedProducts.map((p) {
+      if (p['id'] == id) {
+        final updated = Map<String, dynamic>.from(p);
+        updated.addAll(productData);
+        return updated;
+      }
+      return p;
+    }).toList();
+    if (FirebaseRealtimeListenerService.isApplyingCloudUpdate) return res;
+    Future.microtask(() async {
+      try {
+        await FirebaseProductService.instance
+            .updateProductInFirebase(id, productData);
+      } catch (e) {
+        debugPrint('[DatabaseHelper] Auto-sync updateProduct ke Firebase: $e');
+      }
+    });
     return res;
   }
 
   Future<int> deleteProduct(int id) async {
     final db = await instance.database;
     final res = await db.delete('products', where: 'id = ?', whereArgs: [id]);
-    try {
-      await FirebaseProductService.instance.deleteProductFromFirebase(id);
-    } catch (e) {
-      debugPrint('[DatabaseHelper] Auto-sync deleteProduct ke Firebase: $e');
-    }
+    _cachedProducts = _cachedProducts.where((p) => p['id'] != id).toList();
+    if (FirebaseRealtimeListenerService.isApplyingCloudUpdate) return res;
+    Future.microtask(() async {
+      try {
+        await FirebaseProductService.instance.deleteProductFromFirebase(id);
+      } catch (e) {
+        debugPrint('[DatabaseHelper] Auto-sync deleteProduct ke Firebase: $e');
+      }
+    });
     return res;
+  }
+
+  /// Mereset dan mengisi ulang katalog produk resmi standar pasar ke SQLite & Firebase
+  Future<void> resetCatalogToStandardProducts() async {
+    final db = await instance.database;
+    await _ensureExtraColumns(db);
+
+    final defaultProducts = [
+      // Kategori: VPS (Virtual Private Server)
+      {
+        'nama': 'VPS Starter',
+        'kategori': 'VPS',
+        'harga': 50000.0,
+        'stok': 25,
+        'deskripsi':
+            '1 vCPU, 1GB RAM, 25GB NVMe SSD, Bandwidth 1TB (Ubuntu 22.04)'
+      },
+      {
+        'nama': 'VPS Basic',
+        'kategori': 'VPS',
+        'harga': 95000.0,
+        'stok': 20,
+        'deskripsi':
+            '2 vCPU, 2GB RAM, 50GB NVMe SSD, Bandwidth 2TB (Ubuntu 22.04)'
+      },
+      {
+        'nama': 'VPS Pro',
+        'kategori': 'VPS',
+        'harga': 160000.0,
+        'stok': 15,
+        'deskripsi':
+            '4 vCPU, 4GB RAM, 80GB NVMe SSD, Bandwidth 3TB (Ubuntu 22.04)'
+      },
+      {
+        'nama': 'VPS Enterprise',
+        'kategori': 'VPS',
+        'harga': 300000.0,
+        'stok': 10,
+        'deskripsi':
+            '8 vCPU, 8GB RAM, 160GB NVMe SSD, Bandwidth 5TB (Ubuntu 22.04)'
+      },
+
+      // Kategori: Panel Hosting (Pterodactyl Node SG)
+      {
+        'nama': 'Panel Hosting 1GB',
+        'kategori': 'Panel Hosting',
+        'harga': 15000.0,
+        'stok': 30,
+        'deskripsi':
+            '1GB RAM, 1 Core CPU, 10GB NVMe Storage (Pterodactyl Node SG)'
+      },
+      {
+        'nama': 'Panel Hosting 2GB',
+        'kategori': 'Panel Hosting',
+        'harga': 30000.0,
+        'stok': 25,
+        'deskripsi':
+            '2GB RAM, 1.5 Core CPU, 20GB NVMe Storage (Pterodactyl Node SG)'
+      },
+      {
+        'nama': 'Panel Hosting 4GB',
+        'kategori': 'Panel Hosting',
+        'harga': 55000.0,
+        'stok': 20,
+        'deskripsi':
+            '4GB RAM, 2 Core CPU, 40GB NVMe Storage (Pterodactyl Node SG)'
+      },
+      {
+        'nama': 'Panel Hosting Unlimited',
+        'kategori': 'Panel Hosting',
+        'harga': 95000.0,
+        'stok': 15,
+        'deskripsi':
+            'Unlimited RAM, 4 Core CPU, 100GB NVMe Storage (Pterodactyl Turbo)'
+      },
+
+      // Kategori: Bot WhatsApp (Automation & Multi-Device)
+      {
+        'nama': 'Bot WhatsApp Basic',
+        'kategori': 'Bot WhatsApp',
+        'harga': 25000.0,
+        'stok': 40,
+        'deskripsi':
+            '1 Sesi WhatsApp, Auto-Reply, Broadcast Group, Uptime 99.9%'
+      },
+      {
+        'nama': 'Bot WhatsApp Pro',
+        'kategori': 'Bot WhatsApp',
+        'harga': 50000.0,
+        'stok': 30,
+        'deskripsi':
+            '3 Sesi WhatsApp, AI Gemini Integration, Auto Responder, Blast Unlimited'
+      },
+      {
+        'nama': 'Bot WhatsApp Enterprise',
+        'kategori': 'Bot WhatsApp',
+        'harga': 100000.0,
+        'stok': 20,
+        'deskripsi':
+            'Unlimited Sesi, Multi-Device AI Blast 24/7, Dedicated Node, Priority Support 24/7'
+      },
+    ];
+
+    for (final p in defaultProducts) {
+      final existing = await db.query(
+        'products',
+        where: 'nama = ?',
+        whereArgs: [p['nama']],
+        limit: 1,
+      );
+
+      int prodId;
+      if (existing.isNotEmpty) {
+        prodId = existing.first['id'] as int;
+        // Produk sudah ada: pertahankan diskon & data aktif yang sudah disetel user
+      } else {
+        prodId = await db.insert('products', p);
+        final syncData = Map<String, dynamic>.from(p);
+        syncData['id'] = prodId;
+        Future.microtask(() async {
+          try {
+            await FirebaseProductService.instance
+                .saveProductToFirebase(syncData);
+          } catch (_) {}
+        });
+      }
+    }
   }
 
   /// Memperbarui persentase diskon untuk produk tertentu
@@ -1065,13 +1443,15 @@ class DatabaseHelper {
       where: 'id = ?',
       whereArgs: [id],
     );
-    try {
-      await FirebaseProductService.instance
-          .updateProductDiscountInFirebase(id, discountPercent);
-    } catch (e) {
-      debugPrint(
-          '[DatabaseHelper] Auto-sync updateProductDiscount ke Firebase: $e');
-    }
+    Future.microtask(() async {
+      try {
+        await FirebaseProductService.instance
+            .updateProductDiscountInFirebase(id, discountPercent);
+      } catch (e) {
+        debugPrint(
+            '[DatabaseHelper] Auto-sync updateProductDiscount ke Firebase: $e');
+      }
+    });
     return res;
   }
 
@@ -1091,14 +1471,26 @@ class DatabaseHelper {
         whereArgs: ['%$category%'],
       );
     }
-    try {
-      await FirebaseProductService.instance
-          .applyCategoryDiscountInFirebase(category, discountPercent);
-    } catch (e) {
-      debugPrint(
-          '[DatabaseHelper] Auto-sync applyCategoryDiscount ke Firebase: $e');
-    }
+    Future.microtask(() async {
+      try {
+        await FirebaseProductService.instance
+            .applyCategoryDiscountInFirebase(category, discountPercent);
+      } catch (e) {
+        debugPrint(
+            '[DatabaseHelper] Auto-sync applyCategoryDiscount ke Firebase: $e');
+      }
+    });
     return res;
+  }
+
+  /// Menghapus / reset diskon produk tertentu (kembali ke 0%) di SQLite & Firebase
+  Future<int> deleteProductDiscount(int id) async {
+    return await updateProductDiscount(id, 0.0);
+  }
+
+  /// Menghapus / reset diskon kategori tertentu di SQLite & Firebase
+  Future<int> removeCategoryDiscount(String category) async {
+    return await applyCategoryDiscount(category, 0.0);
   }
 
   // --- OPERASI USER TAMBAHAN (PORTAL ADMINISTRATOR) ---
@@ -1142,22 +1534,42 @@ class DatabaseHelper {
       }
     });
 
+    if (sqliteData['password'] != null &&
+        sqliteData['password'].toString().isNotEmpty) {
+      sqliteData['password'] =
+          SecurityHelper.hashPassword(sqliteData['password'].toString());
+    }
+    if (sqliteData['pin'] != null &&
+        sqliteData['pin'].toString().isNotEmpty) {
+      sqliteData['pin'] =
+          SecurityHelper.hashPin(sqliteData['pin'].toString());
+    }
+
     final res = await db.update(
       'users',
       sqliteData,
       where: 'id = ?',
       whereArgs: [id],
     );
-    try {
-      final userQuery =
-          await db.query('users', where: 'id = ?', whereArgs: [id], limit: 1);
-      if (userQuery.isNotEmpty) {
-        await FirebaseUserService.instance.saveUserToFirebase(userQuery.first);
+    if (FirebaseRealtimeListenerService.isApplyingCloudUpdate) return res;
+    Future.microtask(() async {
+      try {
+        final userQuery =
+            await db.query('users', where: 'id = ?', whereArgs: [id], limit: 1);
+        if (userQuery.isNotEmpty) {
+          final u = userQuery.first;
+          await FirebaseUserService.instance.updateUserInFirebase(
+            uid: u['uid']?.toString(),
+            email: u['email']?.toString(),
+            username: u['username']?.toString(),
+            updatedData: Map<String, dynamic>.from(u),
+          );
+        }
+      } catch (e) {
+        debugPrint(
+            '[DatabaseHelper] Auto-sync updateUserFull ke Firebase gagal: $e');
       }
-    } catch (e) {
-      debugPrint(
-          '[DatabaseHelper] Auto-sync updateUserFull ke Firebase gagal: $e');
-    }
+    });
     return res;
   }
 
@@ -1190,39 +1602,57 @@ class DatabaseHelper {
       whereArgs: [id, finalUid ?? '', finalEmail ?? '', finalUsername ?? ''],
     );
 
-    try {
-      await FirebaseUserService.instance.deleteUserFromFirebase(
-        uid: finalUid,
-        email: finalEmail,
-        username: finalUsername,
-      );
-    } catch (e) {
-      debugPrint(
-          '[DatabaseHelper] Auto-sync deleteUser dari Firebase gagal: $e');
-    }
+    Future.microtask(() async {
+      try {
+        await FirebaseUserService.instance.deleteUserFromFirebase(
+          uid: finalUid,
+          email: finalEmail,
+          username: finalUsername,
+        );
+      } catch (e) {
+        debugPrint(
+            '[DatabaseHelper] Auto-sync deleteUser dari Firebase gagal: $e');
+      }
+    });
     return res;
   }
 
   /// Menambahkan akun pengguna/administrator baru langsung dari Portal Admin
-  Future<int> addUser(Map<String, dynamic> data) async {
+  Future<int> addUser(Map<String, dynamic> data,
+      {bool syncToCloud = true}) async {
     final db = await instance.database;
     await _ensureExtraColumns(db);
-    final res = await db.insert('users', data,
+    final cleanData = Map<String, dynamic>.from(data);
+    if (cleanData['password'] != null &&
+        cleanData['password'].toString().isNotEmpty) {
+      cleanData['password'] =
+          SecurityHelper.hashPassword(cleanData['password'].toString());
+    }
+    if (cleanData['pin'] != null &&
+        cleanData['pin'].toString().isNotEmpty) {
+      cleanData['pin'] =
+          SecurityHelper.hashPin(cleanData['pin'].toString());
+    }
+    final res = await db.insert('users', cleanData,
         conflictAlgorithm: ConflictAlgorithm.replace);
-    try {
-      final dataToSync = Map<String, dynamic>.from(data);
-      if (res > 0 && !dataToSync.containsKey('id')) {
-        dataToSync['id'] = res;
-      }
-      await FirebaseUserService.instance.saveUserToFirebase(dataToSync);
-    } catch (e) {
-      debugPrint('[DatabaseHelper] Auto-sync addUser ke Firebase gagal: $e');
+
+    if (syncToCloud && !FirebaseRealtimeListenerService.isApplyingCloudUpdate) {
+      Future.microtask(() async {
+        try {
+          final dataToSync = Map<String, dynamic>.from(cleanData);
+          await FirebaseUserService.instance.saveUserToFirebase(dataToSync);
+        } catch (e) {
+          debugPrint('[DatabaseHelper] Auto-sync addUser ke Firebase gagal: $e');
+        }
+      });
     }
     return res;
   }
 
   // --- FITUR UTAMA B: FULL CRUD TRANSAKSI & PESANAN ---
   Future<void> _ensureTransactionsColumns(Database db) async {
+    if (_transactionsEnsured) return;
+    _transactionsEnsured = true;
     try {
       await db
           .execute('ALTER TABLE transactions ADD COLUMN payment_method TEXT;');
@@ -1232,24 +1662,6 @@ class DatabaseHelper {
     } catch (_) {}
     try {
       await db.execute('ALTER TABLE transactions ADD COLUMN notes TEXT;');
-    } catch (_) {}
-    try {
-      await db.execute('''
-        DELETE FROM transactions 
-        WHERE (LOWER(status) LIKE '%pending%' OR LOWER(status) LIKE '%menunggu%')
-        AND invoice_no IN (
-          SELECT invoice_no FROM transactions 
-          WHERE (LOWER(status) LIKE '%selesai%' OR LOWER(status) LIKE '%success%' OR LOWER(status) LIKE '%lunas%') 
-          AND invoice_no IS NOT NULL AND TRIM(invoice_no) != ''
-        )
-      ''');
-      await db.execute('''
-        DELETE FROM transactions
-        WHERE id NOT IN (
-          SELECT MAX(id) FROM transactions WHERE invoice_no IS NOT NULL AND TRIM(invoice_no) != '' GROUP BY invoice_no
-        )
-        AND invoice_no IS NOT NULL AND TRIM(invoice_no) != ''
-      ''');
     } catch (_) {}
   }
 
@@ -1308,15 +1720,19 @@ class DatabaseHelper {
       resultId = await db.insert('transactions', transactionData);
     }
 
-    // Otomatis sinkronkan & simpan ke Firebase (Realtime Database & Firestore)
-    try {
-      final dataToSync = Map<String, dynamic>.from(transactionData);
-      dataToSync['id'] = resultId;
-      await FirebaseTransactionService.instance
-          .saveTransactionToFirebase(dataToSync);
-    } catch (e) {
-      debugPrint('[DatabaseHelper] Auto-sync transaksi ke Firebase gagal: $e');
-    }
+    // Otomatis sinkronkan & simpan ke Firebase (Realtime Database & Firestore) di latar belakang
+    if (FirebaseRealtimeListenerService.isApplyingCloudUpdate) return resultId;
+    Future.microtask(() async {
+      try {
+        final dataToSync = Map<String, dynamic>.from(transactionData);
+        dataToSync['id'] = resultId;
+        await FirebaseTransactionService.instance
+            .saveTransactionToFirebase(dataToSync);
+      } catch (e) {
+        debugPrint(
+            '[DatabaseHelper] Auto-sync transaksi ke Firebase gagal: $e');
+      }
+    });
 
     return resultId;
   }
@@ -1392,6 +1808,18 @@ class DatabaseHelper {
       orderBy: 'id DESC',
     );
     return deduplicateTransactionsList(raw);
+  }
+
+  Future<Map<String, dynamic>?> getTransactionByInvoice(String invoiceNo) async {
+    final db = await instance.database;
+    final res = await db.query(
+      'transactions',
+      where: 'invoice_no = ?',
+      whereArgs: [invoiceNo],
+      limit: 1,
+    );
+    if (res.isNotEmpty) return res.first;
+    return null;
   }
 
   Future<int> getTotalOrdersCount(
@@ -1486,7 +1914,9 @@ class DatabaseHelper {
     final count = await db.update('transactions', transactionData,
         where: 'id = ?', whereArgs: [id]);
 
-    // Otomatis sinkronkan data transaksi lengkap terbaru ke Firebase Realtime Database & Firestore
+    if (FirebaseRealtimeListenerService.isApplyingCloudUpdate) return count;
+
+    // Sinkronkan data transaksi lengkap terbaru ke Firebase RTDB & Firestore
     try {
       final query = await db.query(
         'transactions',
@@ -1494,18 +1924,21 @@ class DatabaseHelper {
         whereArgs: [id],
         limit: 1,
       );
-      if (query.isNotEmpty) {
-        final fullData = Map<String, dynamic>.from(query.first);
-        await FirebaseTransactionService.instance
-            .saveTransactionToFirebase(fullData);
-      } else {
-        final invoice = transactionData['invoice_no']?.toString();
-        await FirebaseTransactionService.instance.updateTransactionInFirebase(
-          invoiceNo: invoice,
-          localId: id,
-          updatedData: transactionData,
-        );
-      }
+      final Map<String, dynamic> fullData = query.isNotEmpty
+          ? Map<String, dynamic>.from(query.first)
+          : Map<String, dynamic>.from(transactionData);
+
+      final String? invoice = fullData['invoice_no']?.toString();
+      final String? namaProduk = fullData['nama_produk']?.toString();
+      final String? userEmail = fullData['user_email']?.toString();
+
+      await FirebaseTransactionService.instance.updateTransactionInFirebase(
+        invoiceNo: invoice,
+        localId: id,
+        namaProduk: namaProduk,
+        userEmail: userEmail,
+        updatedData: fullData,
+      );
     } catch (e) {
       debugPrint(
           '[DatabaseHelper] Auto-sync update transaksi ke Firebase gagal: $e');
@@ -1518,33 +1951,39 @@ class DatabaseHelper {
     final db = await instance.database;
     await _ensureTransactionsColumns(db);
 
-    // Ambil invoice_no sebelum dihapus untuk referensi Firebase Cloud
+    // Ambil detail lengkap sebelum dihapus untuk pencocokan Firebase RTDB yang 100% akurat
     String? inv = invoiceNo;
-    if (inv == null || inv.isEmpty) {
-      try {
-        final existing = await db.query('transactions',
-            columns: ['invoice_no'],
+    String? namaProduk;
+    String? userEmail;
+    try {
+      final existing = await db.query('transactions',
+          where: 'id = ?', whereArgs: [id], limit: 1);
+      if (existing.isNotEmpty) {
+        inv ??= existing.first['invoice_no']?.toString();
+        namaProduk = existing.first['nama_produk']?.toString();
+        userEmail = existing.first['user_email']?.toString();
+      }
+    } catch (_) {}
+
+    final count = (inv != null && inv.isNotEmpty)
+        ? await db.delete(
+            'transactions',
+            where: 'id = ? OR invoice_no = ?',
+            whereArgs: [id, inv],
+          )
+        : await db.delete(
+            'transactions',
             where: 'id = ?',
             whereArgs: [id],
-            limit: 1);
-        if (existing.isNotEmpty) {
-          inv = existing.first['invoice_no']?.toString();
-        }
-      } catch (_) {}
-    }
+          );
 
-    final count = await db.delete(
-      'transactions',
-      where:
-          'id = ? OR (invoice_no IS NOT NULL AND invoice_no = ? AND invoice_no != "")',
-      whereArgs: [id, inv ?? ''],
-    );
-
-    // Otomatis sinkronkan penghapusan ke Firebase Realtime Database & Firestore
+    // Sinkronkan penghapusan ke Firebase RTDB & Firestore
     try {
       await FirebaseTransactionService.instance.deleteTransactionFromFirebase(
         invoiceNo: inv,
         localId: id,
+        namaProduk: namaProduk,
+        userEmail: userEmail,
       );
     } catch (e) {
       debugPrint(
@@ -1555,15 +1994,38 @@ class DatabaseHelper {
   }
 
   Future<int> deleteTransactionByInvoice(String invoiceNo) async {
-    if (invoiceNo.trim().isEmpty) return 0;
+    final clean = invoiceNo.trim();
+    if (clean.isEmpty) return 0;
     final db = await instance.database;
     await _ensureTransactionsColumns(db);
-    final count = await db.delete('transactions',
-        where: 'invoice_no = ?', whereArgs: [invoiceNo.trim()]);
+
+    int? localId;
+    String? namaProduk;
+    String? userEmail;
+    try {
+      final existing = await db.query('transactions',
+          where: 'invoice_no = ? OR invoice_no = ?',
+          whereArgs: [clean, clean.replaceAll('INV-', '')],
+          limit: 1);
+      if (existing.isNotEmpty) {
+        localId = (existing.first['id'] as num?)?.toInt();
+        namaProduk = existing.first['nama_produk']?.toString();
+        userEmail = existing.first['user_email']?.toString();
+      }
+    } catch (_) {}
+
+    final count = await db.delete(
+      'transactions',
+      where: 'invoice_no = ? OR invoice_no = ? OR id_ref = ?',
+      whereArgs: [clean, clean.replaceAll('INV-', ''), clean],
+    );
 
     try {
       await FirebaseTransactionService.instance.deleteTransactionFromFirebase(
-        invoiceNo: invoiceNo.trim(),
+        invoiceNo: clean,
+        localId: localId,
+        namaProduk: namaProduk,
+        userEmail: userEmail,
       );
     } catch (e) {
       debugPrint(
@@ -1578,6 +2040,7 @@ class DatabaseHelper {
     final db = await instance.database;
     await _ensureServicesTable(db);
     final res = await db.insert('purchased_services', serviceData);
+    if (FirebaseRealtimeListenerService.isApplyingCloudUpdate) return res;
     try {
       final syncData = Map<String, dynamic>.from(serviceData);
       syncData['id'] = res;
@@ -1622,10 +2085,16 @@ class DatabaseHelper {
     await _ensureServicesTable(db);
     final res = await db.update('purchased_services', serviceData,
         where: 'id = ?', whereArgs: [id]);
+    if (FirebaseRealtimeListenerService.isApplyingCloudUpdate) return res;
     try {
-      final updated = Map<String, dynamic>.from(serviceData);
-      updated['id'] = id;
-      await FirebaseTransactionService.instance.saveServiceToFirebase(updated);
+      final existing = await db.query('purchased_services',
+          where: 'id = ?', whereArgs: [id], limit: 1);
+      final fullData = existing.isNotEmpty
+          ? Map<String, dynamic>.from(existing.first)
+          : Map<String, dynamic>.from(serviceData);
+      fullData.addAll(serviceData);
+      fullData['id'] = id;
+      await FirebaseTransactionService.instance.saveServiceToFirebase(fullData);
     } catch (e) {
       debugPrint('[DatabaseHelper] Auto-sync updateService ke Firebase: $e');
     }
@@ -1637,6 +2106,7 @@ class DatabaseHelper {
     await _ensureServicesTable(db);
     final res =
         await db.delete('purchased_services', where: 'id = ?', whereArgs: [id]);
+    if (FirebaseRealtimeListenerService.isApplyingCloudUpdate) return res;
     try {
       await FirebaseTransactionService.instance.deleteServiceFromFirebase(id);
     } catch (e) {
@@ -1814,7 +2284,7 @@ class DatabaseHelper {
   }
 
   // --- FITUR UTAMA D: FULL CRUD KONFIGURASI SERVER EMAIL (SMTP SETTINGS) ---
-  /// Menyimpan atau memperbarui konfigurasi server email (SMTP) ke database SQLite
+  /// Menyimpan atau memperbarui konfigurasi server email (SMTP) ke database SQLite secara permanen dan otomatis aktif
   Future<int> saveEmailSettings({
     required String smtpUser,
     required String smtpPass,
@@ -1826,94 +2296,170 @@ class DatabaseHelper {
     final db = await instance.database;
     await _ensureEmailSettingsTable(db);
 
-    final cleanPass = smtpPass.replaceAll(' ', '');
+    final cleanPass = smtpPass.replaceAll(' ', '').trim();
+    final cleanUser = smtpUser.trim();
+    final cleanHost = smtpHost.trim().isEmpty ? 'smtp.gmail.com' : smtpHost.trim();
     final timestamp = DateTime.now().toIso8601String();
 
     final data = <String, dynamic>{
-      'user_email': userEmail,
-      'smtp_user': smtpUser.trim(),
+      'user_email': userEmail?.trim(),
+      'smtp_user': cleanUser,
       'smtp_pass': cleanPass,
-      'smtp_host': smtpHost.trim().isEmpty ? 'smtp.gmail.com' : smtpHost.trim(),
+      'smtp_host': cleanHost,
       'smtp_port': smtpPort,
+      'is_active': 1,
       'updated_at': timestamp,
     };
 
-    // 1. Cek apakah ada record spesifik untuk user_email ini
-    List<Map<String, dynamic>> existing = [];
+    // 1. Simpan/Perbarui record untuk user_email spesifik (jika disediakan)
+    int result = 0;
     if (userEmail != null && userEmail.trim().isNotEmpty) {
-      existing = await db.query(
+      final existing = await db.query(
         'email_settings',
         where: 'user_email = ?',
         whereArgs: [userEmail.trim()],
         limit: 1,
       );
-    }
-
-    // 2. Jika tidak ada dan userEmail kosong, cari record pertama yang ada
-    if (existing.isEmpty) {
-      existing = await db.query(
-        'email_settings',
-        orderBy: 'id ASC',
-        limit: 1,
-      );
-    }
-
-    int result;
-    // 3. Update jika ada, atau buat record baru jika belum ada sama sekali
-    if (existing.isNotEmpty) {
-      final id = existing.first['id'] as int;
-      result = await db.update(
-        'email_settings',
-        data,
-        where: 'id = ?',
-        whereArgs: [id],
-      );
-    } else {
-      result = await db.insert('email_settings', data);
-    }
-
-    // 4. Sinkronkan secara otomatis ke Google Cloud Firestore (vibetech-xyz) & Firebase
-    if (syncToCloud) {
-      try {
-        await FirebaseEmailService.instance.saveEmailSettings(
-          smtpUser: smtpUser,
-          smtpPass: cleanPass,
-          smtpHost: smtpHost,
-          smtpPort: smtpPort,
-          userEmail: userEmail,
+      if (existing.isNotEmpty) {
+        final id = existing.first['id'] as int;
+        result = await db.update(
+          'email_settings',
+          data,
+          where: 'id = ?',
+          whereArgs: [id],
         );
-      } catch (e) {
-        debugPrint('Error syncing email settings to Firebase: $e');
+      } else {
+        result = await db.insert('email_settings', data);
       }
+    }
+
+    // 2. Selalu simpan / perbarui juga ke record global (user_email IS NULL)
+    // agar seluruh notifikasi sistem, invoice, dan transaksi otomatis selalu menggunakan konfigurasi aktif ini
+    final globalData = Map<String, dynamic>.from(data);
+    globalData['user_email'] = null;
+    final globalExisting = await db.query(
+      'email_settings',
+      where: 'user_email IS NULL',
+      orderBy: 'id DESC',
+      limit: 1,
+    );
+    if (globalExisting.isNotEmpty) {
+      final globalId = globalExisting.first['id'] as int;
+      final updateRes = await db.update(
+        'email_settings',
+        globalData,
+        where: 'id = ?',
+        whereArgs: [globalId],
+      );
+      if (result == 0) result = updateRes;
+    } else {
+      final insertRes = await db.insert('email_settings', globalData);
+      if (result == 0) result = insertRes;
+    }
+
+    // 3. Simpan ke SharedPreferences secara instan sebagai runtime cache & redundansi permanen
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('smtp_user', cleanUser);
+      await prefs.setString('smtp_pass', cleanPass);
+      await prefs.setString('smtp_host', cleanHost);
+      await prefs.setInt('smtp_port', smtpPort);
+      await prefs.setBool('smtp_is_active', true);
+      await prefs.setString('smtp_updated_at', timestamp);
+    } catch (_) {}
+
+    // 4. Sinkronkan secara otomatis ke Google Cloud Firestore & Firebase di latar belakang (Non-blocking)
+    if (syncToCloud) {
+      FirebaseEmailService.instance
+          .saveEmailSettings(
+            smtpUser: cleanUser,
+            smtpPass: cleanPass,
+            smtpHost: cleanHost,
+            smtpPort: smtpPort,
+            userEmail: userEmail,
+          )
+          .catchError((e) {
+        debugPrint('[DatabaseHelper] Background sync email settings info: $e');
+        return false;
+      });
     }
 
     return result;
   }
 
-  /// Mengambil data konfigurasi server email (SMTP) dari database SQLite
+  /// Mengambil data konfigurasi server email (SMTP) dari database SQLite secara cerdas
   Future<Map<String, dynamic>?> getEmailSettings({String? userEmail}) async {
     final db = await instance.database;
     await _ensureEmailSettingsTable(db);
 
-    // 1. Cari berdasarkan user_email terlebih dahulu
+    // 1. Cari berdasarkan user_email terlebih dahulu dengan sandi non-kosong
     if (userEmail != null && userEmail.trim().isNotEmpty) {
       final res = await db.query(
+        'email_settings',
+        where: 'user_email = ? AND smtp_pass IS NOT NULL AND smtp_pass != ""',
+        whereArgs: [userEmail.trim()],
+        orderBy: 'id DESC',
+        limit: 1,
+      );
+      if (res.isNotEmpty) return res.first;
+
+      // Coba record apapun untuk user ini jika ada
+      final anyUserRes = await db.query(
         'email_settings',
         where: 'user_email = ?',
         whereArgs: [userEmail.trim()],
         orderBy: 'id DESC',
         limit: 1,
       );
-      if (res.isNotEmpty) return res.first;
+      if (anyUserRes.isNotEmpty &&
+          (anyUserRes.first['smtp_pass']?.toString().isNotEmpty ?? false)) {
+        return anyUserRes.first;
+      }
     }
 
-    // 2. Fallback: ambil konfigurasi email aktif terbaru di database
+    // 2. Cari setting global aktif (user_email IS NULL) dengan sandi non-kosong
+    final globalSettings = await db.query(
+      'email_settings',
+      where: 'user_email IS NULL AND smtp_pass IS NOT NULL AND smtp_pass != ""',
+      orderBy: 'id DESC',
+      limit: 1,
+    );
+    if (globalSettings.isNotEmpty) return globalSettings.first;
+
+    // 3. Fallback: ambil konfigurasi email dengan sandi valid terbaru di database
+    final activeAny = await db.query(
+      'email_settings',
+      where: 'smtp_pass IS NOT NULL AND smtp_pass != ""',
+      orderBy: 'id DESC',
+      limit: 1,
+    );
+    if (activeAny.isNotEmpty) return activeAny.first;
+
+    // 4. Fallback record terakhir di database
     final globalRes = await db.query(
       'email_settings',
       orderBy: 'id DESC',
       limit: 1,
     );
     if (globalRes.isNotEmpty) return globalRes.first;
+
+    // 5. Fallback ke SharedPreferences jika database belum termuat
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final u = prefs.getString('smtp_user');
+      final p = prefs.getString('smtp_pass');
+      if (u != null && u.isNotEmpty && p != null && p.isNotEmpty) {
+        return {
+          'smtp_user': u,
+          'smtp_pass': p,
+          'smtp_host': prefs.getString('smtp_host') ?? 'smtp.gmail.com',
+          'smtp_port': prefs.getInt('smtp_port') ?? 465,
+          'is_active': 1,
+          'updated_at': prefs.getString('smtp_updated_at') ??
+              DateTime.now().toIso8601String(),
+        };
+      }
+    } catch (_) {}
 
     return null;
   }

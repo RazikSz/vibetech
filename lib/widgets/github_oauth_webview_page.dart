@@ -98,7 +98,16 @@ class _GithubOAuthWebViewPageState extends State<GithubOAuthWebViewPage> {
 
     final uri = Uri.parse(url);
     if (url.contains('vibetech-xyz.firebaseapp.com/__/auth/handler') ||
-        url.contains('code=')) {
+        url.contains('code=') ||
+        url.contains('error=')) {
+      final error = uri.queryParameters['error'];
+      if (error != null && error.isNotEmpty) {
+        if (!_hasPopped && mounted) {
+          _hasPopped = true;
+          Navigator.of(context).pop(null);
+        }
+        return true;
+      }
       final code = uri.queryParameters['code'];
       if (code != null && code.isNotEmpty) {
         _hasHandledCode = true;

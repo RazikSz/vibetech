@@ -66,7 +66,7 @@ class PurchasedService {
   /// Mengonversi baris tabel SQLite menjadi objek [PurchasedService]
   factory PurchasedService.fromMap(Map<String, dynamic> map) {
     return PurchasedService(
-      id: map['id'] as int?,
+      id: (map['id'] as num?)?.toInt() ?? int.tryParse(map['id']?.toString() ?? ''),
       userEmail: map['user_email'] as String? ?? '',
       namaProduk: map['nama_produk'] as String? ?? '',
       kategori: map['kategori'] as String? ?? '',

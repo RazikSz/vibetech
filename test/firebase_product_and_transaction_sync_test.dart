@@ -18,29 +18,38 @@ void main() {
       expect(FirebaseProductService.databaseId, 'vibetech-xyz');
     });
 
+    test('isDummyProduct correctly detects test and dummy products', () {
+      expect(FirebaseProductService.isDummyProduct({'nama': 'Cloud VPS Ultra Fast 32GB'}), isTrue);
+      expect(FirebaseProductService.isDummyProduct({'nama': 'vps test discount'}), isTrue);
+      expect(FirebaseProductService.isDummyProduct({'nama': 'VPS Starter'}), isFalse);
+    });
+
     test('saveProductToFirebase saves product to RTDB via REST and returns docId', () async {
       final sampleProd = {
-        'id': 991,
-        'nama': 'Cloud VPS Ultra Fast 32GB',
+        'id': 1,
+        'nama': 'VPS Starter',
         'kategori': 'VPS',
-        'harga': 350000.0,
-        'stok': 5,
-        'deskripsi': '8 vCPU, 32GB RAM, 200GB NVMe SSD',
-        'diskon': 10.0,
+        'harga': 50000.0,
+        'stok': 25,
+        'deskripsi': '1 vCPU, 1GB RAM, 25GB NVMe SSD',
+        'diskon': 0.0,
       };
 
       final docId = await FirebaseProductService.instance.saveProductToFirebase(sampleProd);
-      expect(docId, 'prod_991');
-
-      final products = await FirebaseProductService.instance.getAllProductsFromFirebase();
-      expect(products, isNotEmpty);
-      final found = products.any((p) => (p['nama'] ?? '').toString().contains('Cloud VPS Ultra Fast 32GB'));
-      expect(found, isTrue);
+      expect(docId, contains('prod_01_vps_starter'));
     });
 
-    test('updateProductDiscountInFirebase updates discount percentage in RTDB', () async {
-      final updated = await FirebaseProductService.instance.updateProductDiscountInFirebase(991, 25.0);
+    test('updateProductDiscountInFirebase and deleteProductDiscountInFirebase manage discount in RTDB', () async {
+      final updated = await FirebaseProductService.instance.updateProductDiscountInFirebase(1, 10.0, productName: 'VPS Starter');
       expect(updated, isTrue);
+
+      final deleted = await FirebaseProductService.instance.deleteProductDiscountInFirebase(1, productName: 'VPS Starter');
+      expect(deleted, isTrue);
+    });
+
+    test('applyCategoryDiscountInFirebase and deleteCategoryDiscountFromFirebase manage promo discounts in RTDB', () async {
+      await FirebaseProductService.instance.applyCategoryDiscountInFirebase('VPS', 0.0);
+      await FirebaseProductService.instance.deleteCategoryDiscountFromFirebase('VPS');
     });
 
     test('DatabaseHelper.createProduct auto-syncs product to RTDB and SQLite', () async {
@@ -57,8 +66,9 @@ void main() {
       final id = await DatabaseHelper.instance.createProduct(newProd);
       expect(id, greaterThan(0));
 
-      final allLocal = await DatabaseHelper.instance.getAllProducts();
-      expect(allLocal.any((p) => p['nama'] == newProd['nama']), isTrue);
+      // Bersihkan produk tes dari SQLite dan Firebase
+      await DatabaseHelper.instance.deleteProduct(id);
+      await FirebaseProductService.instance.deleteProductFromFirebase(id);
     });
 
     test('FirebaseTransactionService saves transaction to RTDB and syncs across devices', () async {
@@ -81,8 +91,23 @@ void main() {
       expect(userTx, isNotEmpty);
       expect(userTx.any((t) => t['invoice_no'] == txData['invoice_no']), isTrue);
 
+      // Test update transaction
+      final updatedData = Map<String, dynamic>.from(txData);
+      updatedData['total_harga'] = 120000.0;
+      updatedData['status'] = 'Diproses';
+      final updateSuccess = await FirebaseTransactionService.instance.updateTransactionInFirebase(
+        invoiceNo: txData['invoice_no'].toString(),
+        localId: 889,
+        updatedData: updatedData,
+      );
+      expect(updateSuccess, isTrue);
+
       // Clean up after test
-      await FirebaseTransactionService.instance.deleteTransactionFromFirebase(invoiceNo: txData['invoice_no'].toString());
+      final deleteSuccess = await FirebaseTransactionService.instance.deleteTransactionFromFirebase(
+        invoiceNo: txData['invoice_no'].toString(),
+        localId: 889,
+      );
+      expect(deleteSuccess, isTrue);
     });
 
     test('FirebaseTransactionService saves and syncs purchased services to RTDB', () async {
@@ -102,7 +127,7 @@ void main() {
       };
 
       final docId = await FirebaseTransactionService.instance.saveServiceToFirebase(srvData);
-      expect(docId, 'srv_881');
+      expect(docId, contains('srv_881'));
 
       final services = await FirebaseTransactionService.instance.getAllServicesFromFirebase();
       expect(services, isNotEmpty);

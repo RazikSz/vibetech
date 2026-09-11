@@ -10,6 +10,7 @@ import 'package:vibetech_xyz/pages/common/splash_page.dart';
 import 'package:vibetech_xyz/services/balance_service.dart';
 import 'package:vibetech_xyz/services/cloud_sync_service.dart';
 import 'package:vibetech_xyz/services/language_service.dart';
+import 'package:vibetech_xyz/services/notification_service.dart';
 import 'package:vibetech_xyz/services/theme_service.dart';
 
 /// ============================================================================
@@ -29,50 +30,59 @@ void main() async {
 
   // 2. Inisialisasi Firebase dengan konfigurasi platform saat ini
   try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+    }
   } catch (e) {
     debugPrint('[Main] Info inisialisasi Firebase SDK: $e');
   }
 
-  // 3. Sinkronisasi penuh lintas perangkat (Multi-Platform Cloud Sync: PC, Android, iOS, Web)
-  // Menjamin seluruh HP & PC memiliki database pengguna, produk, layanan, transaksi, dan SMTP yang persis sama
+  // 3. Inisialisasi Notification Service & Channels
   try {
-    CloudSyncService.instance.syncAllFromCloud();
+    await NotificationService.init();
   } catch (e) {
-    debugPrint('[Main] Background sync info: $e');
+    debugPrint('[Main] Gagal menginisialisasi NotificationService: $e');
   }
 
-  // 2. Inisialisasi locale formatting untuk format tanggal & mata uang Rupiah
+  // 4. Sinkronisasi penuh lintas perangkat (Multi-Platform Cloud Sync: PC, Android, iOS, Web)
+  // Menjamin seluruh HP & PC memiliki database pengguna, produk, layanan, transaksi, dan SMTP yang persis sama
+  try {
+    CloudSyncService.instance.startRealtimeSync();
+  } catch (e) {
+    debugPrint('[Main] Realtime background sync info: $e');
+  }
+
+  // 5. Inisialisasi locale formatting untuk format tanggal & mata uang Rupiah
   try {
     await initializeDateFormatting('id_ID', null);
   } catch (e) {
     debugPrint('[Main] Gagal menginisialisasi locale id_ID: $e');
   }
 
-  // 3. Inisialisasi layanan tema (Dark Mode / Light Mode) dari SharedPreferences
+  // 6. Inisialisasi layanan tema (Dark Mode / Light Mode) dari SharedPreferences
   try {
     await ThemeService.initTheme();
   } catch (e) {
     debugPrint('[Main] Gagal menginisialisasi ThemeService: $e');
   }
 
-  // 4. Inisialisasi layanan bahasa (Indonesia / English) dari SharedPreferences
+  // 7. Inisialisasi layanan bahasa (Indonesia / English) dari SharedPreferences
   try {
     await LanguageService.initLanguage();
   } catch (e) {
     debugPrint('[Main] Gagal menginisialisasi LanguageService: $e');
   }
 
-  // 5. Inisialisasi layanan saldo pengguna aktif dari SQLite / SharedPreferences
+  // 8. Inisialisasi layanan saldo pengguna aktif dari SQLite / SharedPreferences
   try {
     await BalanceService.initBalance();
   } catch (e) {
     debugPrint('[Main] Gagal menginisialisasi BalanceService: $e');
   }
 
-  // 6. Jalankan aplikasi utama
+  // 9. Jalankan aplikasi utama
   runApp(const VibeTechApp());
 }
 

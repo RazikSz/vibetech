@@ -1,6 +1,7 @@
 {
   "project_info": {
     "project_number": "567350641192",
+    "firebase_url": "https://vibetech-xyz-default-rtdb.asia-southeast1.firebasedatabase.app",
     "project_id": "vibetech-xyz",
     "storage_bucket": "vibetech-xyz.firebasestorage.app"
   },
@@ -12,7 +13,52 @@
           "package_name": "com.raziek.vibetech_xyz"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "567350641192-7u0vcp8ie0pii65rnkhf8e03o4v64esc.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.raziek.vibetech_xyz",
+            "certificate_hash": "405de2cb89c31a222508f37530b0505ce6d504bd"
+          }
+        },
+        {
+          "client_id": "567350641192-gn9ohdacn6cg1ioor3dkpftcfj8m3076.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.raziek.vibetech_xyz",
+            "certificate_hash": "13e19ab55a12489816115eb470972c8d2b1b8644"
+          }
+        },
+        {
+          "client_id": "567350641192-iu0664fbrlticci6g345rmm16l2k6k1s.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.raziek.vibetech_xyz",
+            "certificate_hash": "7444752d460abf71b6a3c5df801f50c40d128481"
+          }
+        },
+        {
+          "client_id": "567350641192-k5kth9llr33rl9qjpe08hvfkfps0r7l5.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.raziek.vibetech_xyz",
+            "certificate_hash": "d705d3561fe19fb6ea8be2ad7d14e2f2f6d26fb2"
+          }
+        },
+        {
+          "client_id": "567350641192-n2piqd2cuhpoid4eta3gfg7ql53b4vfm.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.raziek.vibetech_xyz",
+            "certificate_hash": "d0dcc3b1256c11b08f90b329d95c166282b6edbe"
+          }
+        },
+        {
+          "client_id": "567350641192-na1ceptefqbtf0j8v1aicsfif1lvupn8.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyCfZOlBKRTSLo-RXOwaaXg-XPRb0_PZ0aI"
@@ -20,7 +66,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "567350641192-na1ceptefqbtf0j8v1aicsfif1lvupn8.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "567350641192-c79a7c0hfrkrafbnadrlkf5b7qj2anpg.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.vibetechXyz"
+              }
+            }
+          ]
         }
       }
     }

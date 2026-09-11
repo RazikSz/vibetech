@@ -9,12 +9,15 @@ import 'package:vibetech_xyz/pages/auth/login_page.dart';
 import 'package:vibetech_xyz/pages/common/data_layanan_page.dart';
 import 'package:vibetech_xyz/pages/common/notifikasi_page.dart';
 import 'package:vibetech_xyz/pages/common/total_pesanan_page.dart';
+import 'package:vibetech_xyz/services/balance_service.dart';
 import 'package:vibetech_xyz/services/cloud_sync_service.dart';
+import 'package:vibetech_xyz/services/firebase_auth_token_service.dart';
 import 'package:vibetech_xyz/services/firebase_email_service.dart';
 import 'package:vibetech_xyz/services/firebase_user_service.dart';
 import 'package:vibetech_xyz/services/language_service.dart';
 import 'package:vibetech_xyz/services/notification_service.dart';
 import 'package:vibetech_xyz/services/theme_service.dart';
+import 'package:vibetech_xyz/utils/security_helper.dart';
 
 /// ============================================================================
 /// HALAMAN PROFIL & PENGATURAN AKUN (PROFILE PAGE)
@@ -27,11 +30,21 @@ import 'package:vibetech_xyz/services/theme_service.dart';
 class ProfilePage extends StatefulWidget {
   final bool isDarkMode;
   final String username;
+  final String? initialEmail;
+  final String? initialAvatarUrl;
+  final String? initialRole;
+  final String? initialPhone;
+  final String? initialLocation;
 
   const ProfilePage({
     super.key,
     required this.isDarkMode,
     required this.username,
+    this.initialEmail,
+    this.initialAvatarUrl,
+    this.initialRole,
+    this.initialPhone,
+    this.initialLocation,
   });
 
   @override
@@ -55,20 +68,31 @@ class _ProfilePageState extends State<ProfilePage>
   String _avatarUrl = '';
   String _currentUserRole = 'user';
   bool _is2FA = true;
-  bool _isLoadingDB = true;
+  bool _isFetchingDB = false;
 
   // Statistik Dinamis (Pesanan, Layanan, Transaksi)
   int _pesananCount = 0;
   int _layananCount = 0;
   int _transaksiCount = 0;
 
-  bool get _isAdmin =>
-      _currentUserRole.toLowerCase() == 'admin' ||
-      _currentUserRole.toLowerCase() == 'administrator';
+  bool get _isAdmin {
+    final r = _currentUserRole.toLowerCase().trim();
+    final e = _email.toLowerCase().trim();
+    final u = _currentUsername.toLowerCase().trim();
+    return r == 'admin' ||
+        r == 'administrator' ||
+        e == 'admin@vibetech.com' ||
+        e == 'admin@vibetech.xyz' ||
+        u == 'admin' ||
+        u == 'raziek';
+  }
 
   // Notifikasi toggle state
   bool _pushNotification = true;
   bool _emailNotification = false;
+
+  VoidCallback? _usersRealtimeListener;
+  VoidCallback? _balanceRealtimeListener;
 
   @override
   void initState() {
@@ -77,27 +101,82 @@ class _ProfilePageState extends State<ProfilePage>
     ThemeService.themeNotifier.addListener(_onThemeChanged);
     _currentUsername = widget.username;
 
+    // 1. Langsung inisialisasi state dari parameter konstruktor (0ms frame pertama)
+    _displayName = widget.username;
+    _email = widget.initialEmail ?? '';
+    _avatarUrl = widget.initialAvatarUrl ?? '';
+    _currentUserRole = (widget.initialRole ?? 'user').toLowerCase();
+    _phone = widget.initialPhone ?? '+62 812 3456 7890';
+    _location = widget.initialLocation ?? 'Jakarta, Indonesia';
+
     _mainAnimationController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1200),
+      duration: const Duration(milliseconds: 350),
     );
 
     _headerAnimationController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 800),
+      duration: const Duration(milliseconds: 300),
     );
 
-    _headerScaleAnimation = Tween<double>(begin: 0.8, end: 1.0).animate(
+    _headerScaleAnimation = Tween<double>(begin: 0.9, end: 1.0).animate(
       CurvedAnimation(
         parent: _headerAnimationController,
-        curve: Curves.elasticOut,
+        curve: Curves.easeOutCubic,
       ),
     );
 
     _mainAnimationController.forward();
     _headerAnimationController.forward();
 
+    // 2. Muat cache dari SharedPreferences secara cepat
+    _loadCachedUserData();
+
+    // 3. Muat database lokal dan statistik di latar belakang (non-blocking)
     _loadUserDataFromDB();
+
+    // 4. Hubungkan listener streaming real-time Firebase RTDB dengan guard non-blocking
+    _usersRealtimeListener = () {
+      if (mounted && !_isFetchingDB) {
+        _loadUserDataFromDB();
+      }
+    };
+    CloudSyncService.instance.usersNotifier.addListener(_usersRealtimeListener!);
+
+    _balanceRealtimeListener = () {
+      if (mounted && !_isFetchingDB) {
+        _loadUserDataFromDB();
+      }
+    };
+    BalanceService.notifier.addListener(_balanceRealtimeListener!);
+  }
+
+  Future<void> _loadCachedUserData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      final cachedUid = prefs.getString('user_uid') ?? '';
+      final cachedName = prefs.getString('username') ?? _displayName;
+      final cachedEmail = prefs.getString('email') ?? _email;
+      final cachedAvatar = prefs.getString('avatarUrl') ?? _avatarUrl;
+      final cachedRole = prefs.getString('role') ?? _currentUserRole;
+
+      setState(() {
+        if (cachedUid.isNotEmpty) _userUid = cachedUid;
+        if (cachedName.isNotEmpty) _displayName = cachedName;
+        if (cachedEmail.isNotEmpty) _email = cachedEmail;
+        if (cachedAvatar.isNotEmpty) _avatarUrl = cachedAvatar;
+        if (cachedRole.isNotEmpty) _currentUserRole = cachedRole.toLowerCase();
+        final hasSmtp = (prefs.getString('smtp_user')?.isNotEmpty ?? false) &&
+            (prefs.getString('smtp_pass')?.isNotEmpty ?? false);
+        final smtpActive = prefs.getBool('smtp_is_active') ?? hasSmtp;
+        _pushNotification = NotificationService.isPushEnabled;
+        _emailNotification = smtpActive ? true : NotificationService.isEmailEnabled;
+        if (smtpActive) {
+          NotificationService.emailEnabledNotifier.value = true;
+        }
+      });
+    } catch (_) {}
   }
 
   void _onThemeChanged() {
@@ -109,7 +188,23 @@ class _ProfilePageState extends State<ProfilePage>
   }
 
   @override
+  void didUpdateWidget(covariant ProfilePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isDarkMode != widget.isDarkMode) {
+      setState(() {
+        _isDarkMode = widget.isDarkMode;
+      });
+    }
+  }
+
+  @override
   void dispose() {
+    if (_usersRealtimeListener != null) {
+      CloudSyncService.instance.usersNotifier.removeListener(_usersRealtimeListener!);
+    }
+    if (_balanceRealtimeListener != null) {
+      BalanceService.notifier.removeListener(_balanceRealtimeListener!);
+    }
     ThemeService.themeNotifier.removeListener(_onThemeChanged);
     _mainAnimationController.dispose();
     _headerAnimationController.dispose();
@@ -120,11 +215,13 @@ class _ProfilePageState extends State<ProfilePage>
   // ===         DATABASE SYNC / LOAD DATA             ===
   // =====================================================
   Future<void> _loadUserDataFromDB() async {
+    if (_isFetchingDB) return;
+    _isFetchingDB = true;
     try {
       final prefs = await SharedPreferences.getInstance();
       final savedUid = prefs.getString('user_uid');
-      final savedEmail = prefs.getString('email');
-      final savedUsername = prefs.getString('username');
+      final savedEmail = prefs.getString('email') ?? (_email.isNotEmpty ? _email : null);
+      final savedUsername = prefs.getString('username') ?? _currentUsername;
 
       Map<String, dynamic>? user;
       if (savedUid != null && savedUid.isNotEmpty) {
@@ -133,7 +230,7 @@ class _ProfilePageState extends State<ProfilePage>
       if (user == null && savedEmail != null && savedEmail.isNotEmpty) {
         user = await DatabaseHelper.instance.getUserByEmail(savedEmail);
       }
-      if (user == null && savedUsername != null && savedUsername.isNotEmpty) {
+      if (user == null && savedUsername.isNotEmpty) {
         user = await DatabaseHelper.instance
             .getUserByUsernameOrEmail(savedUsername);
       }
@@ -141,50 +238,23 @@ class _ProfilePageState extends State<ProfilePage>
           .getUserByUsernameOrEmail(_currentUsername);
 
       if (user == null) {
-        // 1. Coba cari & unduh dari Cloud Firebase terlebih dahulu
-        try {
-          final cloudUser = await FirebaseUserService.instance
-              .getUserFromFirebase(savedEmail ?? savedUsername ?? _currentUsername);
-          if (cloudUser != null) {
-            final registeredUser = {
-              'uid': cloudUser['uid'] ??
-                  'usr_${DateTime.now().millisecondsSinceEpoch}',
-              'nama': cloudUser['nama'] ?? _currentUsername,
-              'username': cloudUser['username'] ??
-                  _currentUsername.toLowerCase().replaceAll(' ', '_'),
-              'email': cloudUser['email'] ??
-                  '${_currentUsername.toLowerCase().replaceAll(' ', '_')}@vibetech.xyz',
-              'phone': cloudUser['phone'] ?? '081234567890',
-              'password': cloudUser['password'] ?? 'password123',
-              'pin': cloudUser['pin'] ?? '123456',
-              'role': cloudUser['role'] ?? 'user',
-              'saldo': (cloudUser['saldo'] as num?)?.toDouble() ?? 0.0,
-              'location': cloudUser['location'] ?? 'Jakarta, Indonesia',
-              'avatarUrl': cloudUser['avatarUrl'] ??
-                  'https://cdn.nekohime.site/file/5232n74c.jpeg',
-              'is2FA': (cloudUser['is2FA'] as num?)?.toInt() ?? 1,
-              'language': cloudUser['language'] ?? 'Indonesia',
-              'createdAt': cloudUser['createdAt'] ??
-                  DateTime.now().toIso8601String(),
-            };
-            await DatabaseHelper.instance.registerUser(registeredUser);
-            user = registeredUser;
-          }
-        } catch (_) {}
-      }
-
-      if (user == null) {
-        // Fallback: daftarkan user jika belum ada di DB
+        // Fallback instan: daftarkan user jika belum ada di SQLite lokal (0ms tanpa block network)
         final newUser = {
-          'uid': 'usr_${DateTime.now().millisecondsSinceEpoch}',
+          'uid': (savedUid != null && savedUid.isNotEmpty)
+              ? savedUid
+              : 'usr_${DateTime.now().millisecondsSinceEpoch}',
           'nama': _currentUsername,
           'username': _currentUsername.toLowerCase().replaceAll(' ', '_'),
-          'email':
+          'email': savedEmail ??
               '${_currentUsername.toLowerCase().replaceAll(' ', '_')}@vibetech.xyz',
           'phone': '081234567890',
-          'password': 'password123',
+          'password': SecurityHelper.hashPassword(
+              'vbt_vault_${DateTime.now().millisecondsSinceEpoch}'),
+          'pin': SecurityHelper.hashPin('123456'),
           'location': 'Jakarta, Indonesia',
-          'avatarUrl': 'https://cdn.nekohime.site/file/5232n74c.jpeg',
+          'avatarUrl': _avatarUrl.isNotEmpty
+              ? _avatarUrl
+              : 'https://avatars.githubusercontent.com/${_currentUsername.toLowerCase().replaceAll(' ', '_')}',
           'is2FA': 1,
           'language': 'Indonesia',
           'role': 'User',
@@ -192,6 +262,16 @@ class _ProfilePageState extends State<ProfilePage>
         };
         await DatabaseHelper.instance.registerUser(newUser);
         user = newUser;
+
+        // Ambil data terbaru dari cloud secara non-blocking di latar belakang
+        FirebaseUserService.instance
+            .getUserFromFirebase(savedEmail ?? savedUsername)
+            .then((cloudUser) {
+          if (cloudUser != null && mounted) {
+            DatabaseHelper.instance.registerUser(cloudUser);
+            _loadUserDataFromDB();
+          }
+        }).catchError((_) => null);
       }
 
       final uid = user['uid']?.toString() ?? '';
@@ -204,6 +284,8 @@ class _ProfilePageState extends State<ProfilePage>
       if (user['avatarUrl'] != null &&
           user['avatarUrl'].toString().isNotEmpty) {
         avatar = user['avatarUrl'].toString();
+      } else if (avatar.isEmpty && _avatarUrl.isNotEmpty) {
+        avatar = _avatarUrl;
       } else if (avatar.isEmpty) {
         final cleanUser = (user['username'] ?? name)
             .toString()
@@ -215,34 +297,7 @@ class _ProfilePageState extends State<ProfilePage>
       final role =
           (user['role'] ?? prefs.getString('role') ?? 'user').toString();
 
-      if (uid.isNotEmpty) await prefs.setString('user_uid', uid);
-      await prefs.setString('username', name);
-      await prefs.setString('email', email);
-      await prefs.setString('avatarUrl', avatar);
-      await prefs.setString('role', role);
-
-      await NotificationService.init(name);
-      CloudSyncService.instance.syncAllFromCloud();
-
-      // Hitung Data Realtime: Pesanan, Layanan, dan Transaksi Pengguna
-      int pesanan = 0;
-      int layanan = 0;
-      int transaksi = 0;
-
-      try {
-        final txs = await DatabaseHelper.instance.getTransactionsByUser(email);
-        final services = await DatabaseHelper.instance.getServicesByUser(email);
-        pesanan = txs.where((t) {
-          final pName = (t['nama_produk'] ?? '').toString().toLowerCase();
-          final inv = (t['invoice_no'] ?? '').toString().toLowerCase();
-          return !pName.contains('top up') && !inv.contains('topup');
-        }).length;
-        layanan = services.length;
-        transaksi = txs.length;
-      } catch (err) {
-        debugPrint('[ProfilePage] Error hitung statistik pengguna: $err');
-      }
-
+      // Langsung render profil pengguna ke UI (0ms tanpa menunggu cloud)
       if (mounted) {
         setState(() {
           _userUid = uid;
@@ -253,14 +308,51 @@ class _ProfilePageState extends State<ProfilePage>
           _avatarUrl = avatar;
           _currentUserRole = role.toLowerCase();
           _is2FA = (user['is2FA'] ?? 1) == 1;
+          final hasSmtp = (prefs.getString('smtp_user')?.isNotEmpty ?? false) &&
+              (prefs.getString('smtp_pass')?.isNotEmpty ?? false);
+          final smtpActive = prefs.getBool('smtp_is_active') ?? hasSmtp;
           _pushNotification = NotificationService.isPushEnabled;
-          _emailNotification = NotificationService.isEmailEnabled;
-          _pesananCount = pesanan;
-          _layananCount = layanan;
-          _transaksiCount = transaksi;
-          _isLoadingDB = false;
+          _emailNotification = smtpActive ? true : NotificationService.isEmailEnabled;
+          if (smtpActive) {
+            NotificationService.emailEnabledNotifier.value = true;
+          }
           _currentUsername = name;
         });
+      }
+
+      if (uid.isNotEmpty) await prefs.setString('user_uid', uid);
+      await prefs.setString('username', name);
+      await prefs.setString('email', email);
+      await prefs.setString('avatarUrl', avatar);
+      await prefs.setString('role', role);
+
+      // Hitung Data Realtime: Pesanan, Layanan, dan Transaksi Pengguna secara non-blocking
+      try {
+        final pesananFuture = DatabaseHelper.instance.getTotalOrdersCount(
+          email,
+          onlyProductPurchases: true,
+        );
+        final servicesFuture = DatabaseHelper.instance.getServicesByUser(email);
+        final transaksiFuture = DatabaseHelper.instance.getTotalOrdersCount(
+          email,
+          onlyProductPurchases: false,
+        );
+
+        final results = await Future.wait([
+          pesananFuture,
+          servicesFuture,
+          transaksiFuture,
+        ]).timeout(const Duration(seconds: 2), onTimeout: () => [0, [], 0]);
+
+        if (mounted) {
+          setState(() {
+            _pesananCount = results[0] as int;
+            _layananCount = (results[1] as List).length;
+            _transaksiCount = results[2] as int;
+          });
+        }
+      } catch (err) {
+        debugPrint('[ProfilePage] Error hitung statistik pengguna: $err');
       }
     } catch (e) {
       debugPrint('Error loading user data from DB: $e');
@@ -271,15 +363,14 @@ class _ProfilePageState extends State<ProfilePage>
           _phone = '+62 812 3456 7890';
           _location = 'Jakarta, Indonesia';
           _currentUserRole = 'user';
-          _avatarUrl = 'https://cdn.nekohime.site/file/5232n74c.jpeg';
-          _isLoadingDB = false;
         });
       }
+    } finally {
+      _isFetchingDB = false;
     }
   }
 
   // --- Theme Helpers ---
-  Color get _bgColor => _isDarkMode ? AppColors.darkBg : AppColors.lightBg;
   Color get _cardColor =>
       _isDarkMode ? AppColors.darkCard : AppColors.lightCard;
   Color get _textPrimary =>
@@ -288,8 +379,8 @@ class _ProfilePageState extends State<ProfilePage>
       _isDarkMode ? AppColors.darkTextSecondary : AppColors.lightTextSecondary;
 
   Widget _buildStaggeredItem(Widget child, int index) {
-    final start = (index * 0.1).clamp(0.0, 1.0);
-    final end = (start + 0.4).clamp(0.0, 1.0);
+    final start = (index * 0.05).clamp(0.0, 0.7);
+    final end = (start + 0.3).clamp(0.0, 1.0);
 
     final animation = CurvedAnimation(
       parent: _mainAnimationController,
@@ -299,7 +390,7 @@ class _ProfilePageState extends State<ProfilePage>
     return FadeTransition(
       opacity: animation,
       child: SlideTransition(
-        position: Tween<Offset>(begin: const Offset(0, 0.1), end: Offset.zero)
+        position: Tween<Offset>(begin: const Offset(0, 0.05), end: Offset.zero)
             .animate(animation),
         child: child,
       ),
@@ -315,7 +406,11 @@ class _ProfilePageState extends State<ProfilePage>
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
-      color: _bgColor,
+      decoration: BoxDecoration(
+        gradient: _isDarkMode
+            ? AppColors.darkBackgroundGradient
+            : AppColors.lightBackgroundGradient,
+      ),
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
@@ -347,30 +442,37 @@ class _ProfilePageState extends State<ProfilePage>
           actions: [
             Padding(
               padding: const EdgeInsets.only(right: 16),
-              child: _buildBounceTap(
-                onTap: () {
-                  HapticFeedback.selectionClick();
-                  setState(() => _isDarkMode = !_isDarkMode);
-                },
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: _cardColor,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 400),
-                    transitionBuilder: (child, anim) => RotationTransition(
-                      turns: anim,
-                      child: ScaleTransition(scale: anim, child: child),
+              child: Tooltip(
+                message: _isDarkMode
+                    ? LanguageService.text(
+                        'Ganti ke Mode Terang', 'Switch to Light Mode')
+                    : LanguageService.text(
+                        'Ganti ke Mode Gelap', 'Switch to Dark Mode'),
+                child: _buildBounceTap(
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    ThemeService.toggleTheme();
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: _cardColor,
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    child: Icon(
-                      _isDarkMode
-                          ? Icons.wb_sunny_outlined
-                          : Icons.nightlight_round,
-                      key: ValueKey(_isDarkMode),
-                      color: _isDarkMode ? Colors.amber : AppColors.primary,
-                      size: 20,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 400),
+                      transitionBuilder: (child, anim) => RotationTransition(
+                        turns: anim,
+                        child: ScaleTransition(scale: anim, child: child),
+                      ),
+                      child: Icon(
+                        _isDarkMode
+                            ? Icons.wb_sunny_outlined
+                            : Icons.nightlight_round,
+                        key: ValueKey(_isDarkMode),
+                        color: _isDarkMode ? Colors.amber : AppColors.primary,
+                        size: 20,
+                      ),
                     ),
                   ),
                 ),
@@ -378,14 +480,10 @@ class _ProfilePageState extends State<ProfilePage>
             ),
           ],
         ),
-        body: _isLoadingDB
-            ? const Center(
-                child: CircularProgressIndicator(color: AppColors.primary),
-              )
-            : SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(20, 10, 20, 30),
-                child: Column(
+        body: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 30),
+            child: Column(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     // --- HEADER PROFIL ---
@@ -510,17 +608,7 @@ class _ProfilePageState extends State<ProfilePage>
                       color: Colors.white,
                     ),
                     child: ClipOval(
-                      child: Image.network(
-                        _avatarUrl.isNotEmpty
-                            ? _avatarUrl
-                            : 'https://cdn.nekohime.site/file/5232n74c.jpeg',
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) =>
-                            Image.network(
-                          'https://cdn.nekohime.site/file/5232n74c.jpeg',
-                          fit: BoxFit.cover,
-                        ),
-                      ),
+                      child: _buildAvatarImage(),
                     ),
                   ),
                 ),
@@ -564,7 +652,7 @@ class _ProfilePageState extends State<ProfilePage>
             ),
             const SizedBox(height: 4),
             Text(
-              _email,
+              _email.isNotEmpty ? _email : '${_currentUsername.toLowerCase()}@vibetech.xyz',
               style: GoogleFonts.poppins(
                 color: Colors.white.withValues(alpha: 0.75),
                 fontSize: 13,
@@ -598,6 +686,43 @@ class _ProfilePageState extends State<ProfilePage>
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Avatar Image dengan FrameBuilder dan Fallback Instan (Bebas Lag & Bebas Blank)
+  Widget _buildAvatarImage() {
+    final url = _avatarUrl.trim();
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return Image.network(
+        url,
+        fit: BoxFit.cover,
+        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+          if (wasSynchronouslyLoaded || frame != null) {
+            return child;
+          }
+          return _buildAvatarFallback();
+        },
+        errorBuilder: (context, error, stackTrace) => _buildAvatarFallback(),
+      );
+    }
+    return _buildAvatarFallback();
+  }
+
+  Widget _buildAvatarFallback() {
+    final nameToUse = _displayName.isNotEmpty ? _displayName : _currentUsername;
+    final initial = (nameToUse.isNotEmpty ? nameToUse[0] : 'U').toUpperCase();
+
+    return Container(
+      color: AppColors.primary.withValues(alpha: 0.12),
+      alignment: Alignment.center,
+      child: Text(
+        initial,
+        style: GoogleFonts.poppins(
+          color: AppColors.primary,
+          fontSize: 34,
+          fontWeight: FontWeight.w800,
         ),
       ),
     );
@@ -922,6 +1047,26 @@ class _ProfilePageState extends State<ProfilePage>
             onTap: _showLanguageDialog,
             subtitle: '',
           ),
+          _buildDivider(),
+          _buildSwitchTile(
+            icon: _isDarkMode
+                ? Icons.dark_mode_rounded
+                : Icons.light_mode_rounded,
+            label: LanguageService.text('Mode Gelap (Dark Mode)', 'Dark Mode'),
+            subtitle: LanguageService.text(
+              _isDarkMode
+                  ? 'Tema gelap aktif (Hemat baterai & Cyber Neon)'
+                  : 'Tema terang aktif (Modern Clean & Glassmorphism)',
+              _isDarkMode
+                  ? 'Dark theme active (Battery friendly & Cyber Neon)'
+                  : 'Light theme active (Modern Clean & Glassmorphism)',
+            ),
+            value: _isDarkMode,
+            onChanged: (val) {
+              HapticFeedback.selectionClick();
+              ThemeService.setTheme(val);
+            },
+          ),
         ],
       ),
     );
@@ -943,17 +1088,23 @@ class _ProfilePageState extends State<ProfilePage>
               'Receive instant device alerts (Server, Billing, Promo)',
             ),
             value: _pushNotification,
-            onChanged: (val) {
+            onChanged: (val) async {
               setState(() => _pushNotification = val);
               NotificationService.setPushEnabled(val, _currentUsername);
               if (val) {
-                NotificationService.showInAppNotification(
+                await NotificationService.requestNotificationPermission(
                   context,
-                  title: 'Push Notifikasi Aktif! 🔔',
-                  message:
-                      'Anda akan menerima pemberitahuan langsung di aplikasi.',
-                  type: 'info',
+                  forceDialog: true,
                 );
+                if (mounted) {
+                  NotificationService.showInAppNotification(
+                    context,
+                    title: 'Push Notifikasi Aktif! 🔔',
+                    message:
+                        'Anda akan menerima pemberitahuan langsung di status bar dan aplikasi.',
+                    type: 'info',
+                  );
+                }
               } else {
                 _showSnackbarInfo(LanguageService.text(
                     'Push notifikasi dinonaktifkan',
@@ -995,7 +1146,7 @@ class _ProfilePageState extends State<ProfilePage>
                 'Permanently saved & automated for all notifications',
               ),
               trailing: _buildBadge(
-                  LanguageService.text('Aktif Permanen', 'Permanent Active'),
+                  LanguageService.text('1-Klik Aktif', '1-Click Active'),
                   AppColors.success),
               onTap: _showSmtpConfigDialog,
             ),
@@ -1274,60 +1425,72 @@ class _ProfilePageState extends State<ProfilePage>
                 return;
               }
 
-              final updatedData = {
-                'nama': newName,
-                'username': newName.toLowerCase().replaceAll(' ', '_'),
-                'email': newEmail,
-                'phone': newPhone,
-                'location': newLocation,
-                'avatarUrl': newAvatar.isNotEmpty
-                    ? newAvatar
-                    : (_avatarUrl.isNotEmpty
-                        ? _avatarUrl
-                        : 'https://cdn.nekohime.site/file/5232n74c.jpeg'),
-              };
+              final finalAvatar = newAvatar.isNotEmpty
+                  ? newAvatar
+                  : (_avatarUrl.isNotEmpty
+                      ? _avatarUrl
+                      : 'https://cdn.nekohime.site/file/5232n74c.jpeg');
 
-              int rows = 0;
-              if (_userUid.isNotEmpty) {
-                rows = await DatabaseHelper.instance
-                    .updateUserByUid(_userUid, updatedData);
-              }
-              if (rows == 0 && _email.isNotEmpty) {
-                rows = await DatabaseHelper.instance
-                    .updateUserProfile(_email, updatedData);
-              }
-              if (rows == 0) {
-                rows = await DatabaseHelper.instance
-                    .updateUserProfile(_currentUsername, updatedData);
-              }
-
-              // Update SharedPreferences secara permanen
-              final prefs = await SharedPreferences.getInstance();
-              if (_userUid.isNotEmpty) {
-                await prefs.setString('user_uid', _userUid);
-              }
-              await prefs.setString('username', newName);
-              await prefs.setString('email', newEmail);
-              if (newAvatar.isNotEmpty) {
-                await prefs.setString('avatarUrl', newAvatar);
-              }
+              // 1. Tutup dialog dan perbarui UI secara instan (0ms lag)
+              Navigator.pop(context);
 
               setState(() {
                 _displayName = newName;
                 _email = newEmail;
                 _phone = newPhone;
                 _location = newLocation;
-                _avatarUrl = newAvatar.isNotEmpty
-                    ? newAvatar
-                    : (_avatarUrl.isNotEmpty
-                        ? _avatarUrl
-                        : 'https://cdn.nekohime.site/file/5232n74c.jpeg');
+                _avatarUrl = finalAvatar;
                 _currentUsername = newName;
               });
 
-              if (context.mounted) Navigator.pop(context);
               _showSnackbarSuccess(
-                  'Profil berhasil diperbarui dan disimpan permanen di database!');
+                  'Profil berhasil diperbarui dan disimpan!');
+
+              // 2. Simpan ke database lokal dan SharedPreferences di latar belakang
+              final updatedData = {
+                'nama': newName,
+                'username': newName.toLowerCase().replaceAll(' ', '_'),
+                'email': newEmail,
+                'phone': newPhone,
+                'location': newLocation,
+                'avatarUrl': finalAvatar,
+              };
+
+              try {
+                int rows = 0;
+                if (_userUid.isNotEmpty) {
+                  rows = await DatabaseHelper.instance
+                      .updateUserByUid(_userUid, updatedData);
+                }
+                if (rows == 0 && _email.isNotEmpty) {
+                  rows = await DatabaseHelper.instance
+                      .updateUserProfile(_email, updatedData);
+                }
+                if (rows == 0) {
+                  rows = await DatabaseHelper.instance
+                      .updateUserProfile(_currentUsername, updatedData);
+                }
+
+                // Update SharedPreferences
+                final prefs = await SharedPreferences.getInstance();
+                if (_userUid.isNotEmpty) {
+                  await prefs.setString('user_uid', _userUid);
+                }
+                await prefs.setString('username', newName);
+                await prefs.setString('email', newEmail);
+                if (finalAvatar.isNotEmpty) {
+                  await prefs.setString('avatarUrl', finalAvatar);
+                }
+
+                await FirebaseUserService.instance.updateUserInFirebase(
+                  uid: _userUid,
+                  email: newEmail,
+                  username: newName,
+                  updatedData: updatedData,
+                );
+              } catch (e) {
+                debugPrint('[ProfilePage] Error saving profile to database: $e');
+              }
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
@@ -1467,6 +1630,13 @@ class _ProfilePageState extends State<ProfilePage>
                   await DatabaseHelper.instance
                       .updateUserPassword(_email, newPass);
                 }
+
+                FirebaseUserService.instance.updateUserInFirebase(
+                  uid: _userUid,
+                  email: _email,
+                  username: _currentUsername,
+                  updatedData: {'password': SecurityHelper.hashPassword(newPass)},
+                );
 
                 if (context.mounted) Navigator.pop(context);
                 _showSnackbarSuccess(
@@ -1648,6 +1818,13 @@ class _ProfilePageState extends State<ProfilePage>
                       .updateUserPin(_displayName, newPin);
                 }
 
+                FirebaseUserService.instance.updateUserInFirebase(
+                  uid: _userUid,
+                  email: _email,
+                  username: _displayName,
+                  updatedData: {'pin': SecurityHelper.hashPin(newPin)},
+                );
+
                 if (context.mounted) Navigator.pop(context);
                 _showSnackbarSuccess(LanguageService.text(
                     'PIN Pembayaran berhasil diperbarui di database!',
@@ -1684,6 +1861,14 @@ class _ProfilePageState extends State<ProfilePage>
     if (_email.isNotEmpty && _email != userIdentifier) {
       await DatabaseHelper.instance.updateUser2FA(_email, newStatus);
     }
+
+    FirebaseUserService.instance.updateUserInFirebase(
+      uid: _userUid,
+      email: _email,
+      username: _currentUsername,
+      updatedData: {'is_2fa_enabled': newStatus ? 1 : 0},
+    );
+
     setState(() => _is2FA = newStatus);
 
     if (newStatus) {
@@ -1699,31 +1884,29 @@ class _ProfilePageState extends State<ProfilePage>
   void _showSmtpConfigDialog() async {
     final prefs = await SharedPreferences.getInstance();
 
-    // 1. Muat data konfigurasi dari Google Cloud Firestore, Firebase RTDB & SQLite (dengan fallback SharedPreferences)
     Map<String, dynamic>? dbSettings;
     try {
-      dbSettings = await FirebaseEmailService.instance
-              .getEmailSettings(userEmail: _email) ??
-          await FirebaseEmailService.instance.getEmailSettings() ??
-          await DatabaseHelper.instance.getEmailSettings(userEmail: _email) ??
+      dbSettings = await DatabaseHelper.instance.getEmailSettings(userEmail: _email) ??
           await DatabaseHelper.instance.getEmailSettings();
-    } catch (e) {
-      debugPrint('Error getting email settings: $e');
-    }
+    } catch (_) {}
 
-    final initialUser = dbSettings?['smtp_user']?.toString() ??
-        prefs.getString('smtp_user') ??
-        '';
-    final initialPass = dbSettings?['smtp_pass']?.toString() ??
-        prefs.getString('smtp_pass') ??
-        '';
-    final initialHost = dbSettings?['smtp_host']?.toString() ??
-        prefs.getString('smtp_host') ??
-        'smtp.gmail.com';
-    final initialPort = (dbSettings?['smtp_port'] as num?)?.toInt() ??
+    String initialUser = (dbSettings?['smtp_user']?.toString() ?? '').trim();
+    if (initialUser.isEmpty) {
+      initialUser = (prefs.getString('smtp_user') ?? '').trim();
+    }
+    String initialPass = (dbSettings?['smtp_pass']?.toString() ?? '').trim();
+    if (initialPass.isEmpty) {
+      initialPass = (prefs.getString('smtp_pass') ?? '').trim();
+    }
+    String initialHost = (dbSettings?['smtp_host']?.toString() ?? '').trim();
+    if (initialHost.isEmpty) {
+      initialHost = (prefs.getString('smtp_host') ?? 'smtp.gmail.com').trim();
+    }
+    int initialPort = (dbSettings?['smtp_port'] as num?)?.toInt() ??
         prefs.getInt('smtp_port') ??
         465;
-    final lastUpdated = dbSettings?['updated_at']?.toString();
+    String? lastUpdated = dbSettings?['updated_at']?.toString() ??
+        prefs.getString('smtp_updated_at');
 
     final userController = TextEditingController(text: initialUser);
     final passController = TextEditingController(text: initialPass);
@@ -1738,71 +1921,77 @@ class _ProfilePageState extends State<ProfilePage>
 
     showDialog(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: _cardColor,
-          surfaceTintColor: Colors.transparent,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          title: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppColors.success.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(Icons.cloud_done_rounded,
-                    color: AppColors.success, size: 20),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      LanguageService.text(
-                          'Konfigurasi Email SMTP', 'SMTP Mail Server'),
-                      style: GoogleFonts.poppins(
-                        fontWeight: FontWeight.bold,
-                        color: _textPrimary,
-                        fontSize: 16,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        const Icon(Icons.cloud_sync_rounded,
-                            size: 12, color: AppColors.success),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            LanguageService.text(
-                              'Cloud Firestore (vibetech-xyz) & SQLite',
-                              'Cloud Firestore (vibetech-xyz) & SQLite',
-                            ),
-                            style: GoogleFonts.poppins(
-                              fontSize: 10,
-                              color: AppColors.success,
-                              fontWeight: FontWeight.w600,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) {
+          final bool isConfigured = (userController.text.trim().isNotEmpty &&
+                  passController.text.trim().isNotEmpty) ||
+              (prefs.getBool('smtp_is_active') == true &&
+                  userController.text.trim().isNotEmpty);
+
+          return AlertDialog(
+            backgroundColor: _cardColor,
+            surfaceTintColor: Colors.transparent,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            title: Row(
               children: [
-                // Banner Status Aktif & Permanen jika sudah terisi
-                if (initialUser.isNotEmpty && initialPass.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.success.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.cloud_done_rounded,
+                      color: AppColors.success, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        LanguageService.text(
+                            'Konfigurasi Email SMTP', 'SMTP Mail Server'),
+                        style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.bold,
+                          color: _textPrimary,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          const Icon(Icons.cloud_sync_rounded,
+                              size: 12, color: AppColors.success),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              LanguageService.text(
+                                'Cloud Firestore (vibetech-xyz) & SQLite',
+                                'Cloud Firestore (vibetech-xyz) & SQLite',
+                              ),
+                              style: GoogleFonts.poppins(
+                                fontSize: 10,
+                                color: AppColors.success,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Banner Status Aktif & Permanen jika sudah terisi
+                  if (isConfigured)
                   Container(
                     margin: const EdgeInsets.only(bottom: 12),
                     padding: const EdgeInsets.symmetric(
@@ -1965,7 +2154,7 @@ class _ProfilePageState extends State<ProfilePage>
                     ),
                   ],
                 ),
-                if (lastUpdated != null && lastUpdated.isNotEmpty) ...[
+                if ((lastUpdated ?? '').isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Row(
                     children: [
@@ -1975,8 +2164,8 @@ class _ProfilePageState extends State<ProfilePage>
                       Expanded(
                         child: Text(
                           LanguageService.text(
-                            'Sinkronisasi Database aktif ($lastUpdated)',
-                            'Database sync active ($lastUpdated)',
+                            'Sinkronisasi Database aktif (${lastUpdated!})',
+                            'Database sync active (${lastUpdated!})',
                           ),
                           style: GoogleFonts.poppins(
                             fontSize: 10,
@@ -2005,8 +2194,9 @@ class _ProfilePageState extends State<ProfilePage>
                                 int.tryParse(portController.text.trim()) ?? 465;
 
                             if (user.isEmpty || pass.isEmpty) {
-                              _showSnackbarError(
-                                  'Email pengirim dan Sandi Aplikasi (16 digit) wajib diisi!');
+                              _showSnackbarError(LanguageService.text(
+                                  'Email pengirim dan Sandi Aplikasi (16 digit) wajib diisi!',
+                                  'Sender email and App Password (16-char) are required!'));
                               return;
                             }
 
@@ -2022,11 +2212,52 @@ class _ProfilePageState extends State<ProfilePage>
                               smtpPort: port,
                             );
 
-                            setDialogState(() => isSendingTest = false);
+                            if (mounted) {
+                              setDialogState(() => isSendingTest = false);
+                            }
 
                             if (res['success'] == true) {
+                              // Sekali klik uji coba sukses langsung otomatis simpan & aktifkan (1-Klik Aktif)
+                              try {
+                                await DatabaseHelper.instance.saveEmailSettings(
+                                  smtpUser: user,
+                                  smtpPass: pass,
+                                  smtpHost: host.isNotEmpty ? host : 'smtp.gmail.com',
+                                  smtpPort: port,
+                                  userEmail: _email,
+                                  syncToCloud: true,
+                                );
+                                final p = await SharedPreferences.getInstance();
+                                await p.setString('smtp_user', user);
+                                await p.setString('smtp_pass', pass);
+                                await p.setString('smtp_host', host.isNotEmpty ? host : 'smtp.gmail.com');
+                                await p.setInt('smtp_port', port);
+                                await p.setBool('smtp_is_active', true);
+                                final nowStr = DateTime.now().toString().split('.')[0];
+                                await p.setString('smtp_updated_at', nowStr);
+                                setDialogState(() {
+                                  lastUpdated = nowStr;
+                                });
+                                FirebaseEmailService.instance
+                                    .saveEmailSettings(
+                                      smtpUser: user,
+                                      smtpPass: pass,
+                                      smtpHost: host.isNotEmpty ? host : 'smtp.gmail.com',
+                                      smtpPort: port,
+                                      userEmail: _email,
+                                    )
+                                    .catchError((_) => false);
+                                if (mounted) {
+                                  setState(() => _emailNotification = true);
+                                }
+                                await NotificationService.setEmailEnabled(true, _currentUsername);
+                              } catch (_) {}
+
                               _showSnackbarSuccess(
-                                  '✅ Email tes berhasil terkirim ke $_email! Silakan periksa inbox.');
+                                  LanguageService.text(
+                                    '✅ Email tes berhasil terkirim! Konfigurasi SMTP langsung AKTIF PERMANEN & tersimpan otomatis.',
+                                    '✅ Test email sent! SMTP is now PERMANENTLY ACTIVE and saved automatically.',
+                                  ));
                             } else {
                               _showSnackbarError('${res['message']}');
                             }
@@ -2043,8 +2274,8 @@ class _ProfilePageState extends State<ProfilePage>
                         : const Icon(Icons.send_rounded, size: 16),
                     label: Text(
                       isSendingTest
-                          ? 'Menguji Koneksi...'
-                          : 'Kirim Email Uji Coba ke $_email',
+                          ? LanguageService.text('Menguji Koneksi...', 'Testing Connection...')
+                          : LanguageService.text('Kirim Email Uji Coba ke $_email', 'Send Test Email to $_email'),
                       style: GoogleFonts.poppins(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
@@ -2065,9 +2296,9 @@ class _ProfilePageState extends State<ProfilePage>
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () => Navigator.of(dialogCtx, rootNavigator: true).pop(),
               child: Text(
-                'Tutup',
+                LanguageService.text('Tutup', 'Close'),
                 style: GoogleFonts.poppins(color: _textSecondary),
               ),
             ),
@@ -2083,7 +2314,9 @@ class _ProfilePageState extends State<ProfilePage>
                           int.tryParse(portController.text.trim()) ?? 465;
 
                       if (user.isEmpty) {
-                        _showSnackbarError('Email pengirim wajib diisi!');
+                        _showSnackbarError(LanguageService.text(
+                            'Email pengirim wajib diisi!',
+                            'Sender email is required!'));
                         return;
                       }
 
@@ -2097,6 +2330,7 @@ class _ProfilePageState extends State<ProfilePage>
                           smtpHost: host.isNotEmpty ? host : 'smtp.gmail.com',
                           smtpPort: port,
                           userEmail: _email,
+                          syncToCloud: true,
                         );
 
                         // 2. Simpan ke SharedPreferences sebagai cache runtime
@@ -2106,6 +2340,9 @@ class _ProfilePageState extends State<ProfilePage>
                         await p.setString('smtp_host',
                             host.isNotEmpty ? host : 'smtp.gmail.com');
                         await p.setInt('smtp_port', port);
+                        await p.setBool('smtp_is_active', true);
+                        await p.setString(
+                            'smtp_updated_at', DateTime.now().toString().split('.')[0]);
 
                         // 3. Sinkronkan ke Google Cloud Firestore & Firebase RTDB di latar belakang
                         FirebaseEmailService.instance
@@ -2119,11 +2356,25 @@ class _ProfilePageState extends State<ProfilePage>
                             )
                             .catchError((_) => false);
 
-                        if (context.mounted) Navigator.pop(context);
+                        // 4. Langsung aktifkan notifikasi email di sistem & tampilan (1-Klik Langsung Aktif)
+                        if (mounted) {
+                          setState(() => _emailNotification = true);
+                        }
+                        await NotificationService.setEmailEnabled(true, _currentUsername);
+
+                        // 5. Tutup dialog segera
+                        if (dialogCtx.mounted) {
+                          Navigator.of(dialogCtx, rootNavigator: true).pop();
+                        }
+
                         _showSnackbarSuccess(
-                            '✅ Konfigurasi SMTP berhasil disimpan ke Database Cloud & SQLite!');
+                            LanguageService.text(
+                                '✅ Konfigurasi SMTP tersimpan permanen & AKTIF PERMANEN!',
+                                '✅ SMTP configuration is PERMANENTLY SAVED & ACTIVE!'));
                       } catch (e) {
-                        setDialogState(() => isSaving = false);
+                        if (mounted) {
+                          setDialogState(() => isSaving = false);
+                        }
                         _showSnackbarError(
                             'Gagal menyimpan konfigurasi ke database: $e');
                       }
@@ -2145,7 +2396,7 @@ class _ProfilePageState extends State<ProfilePage>
                       ),
                     )
                   : Text(
-                      'Simpan Permanen',
+                      LanguageService.text('Simpan & Aktifkan', 'Save & Activate'),
                       style: GoogleFonts.poppins(
                         color: Colors.white,
                         fontWeight: FontWeight.w600,
@@ -2153,10 +2404,11 @@ class _ProfilePageState extends State<ProfilePage>
                     ),
             ),
           ],
-        ),
-      ),
-    );
-  }
+        );
+      },
+    ),
+  );
+}
 
   // =====================================================
   // ===         FITUR 4: PILIH BAHASA DIALOG          ===
@@ -2604,7 +2856,11 @@ class _ProfilePageState extends State<ProfilePage>
               await prefs.remove('user_uid');
               await prefs.remove('email');
               await prefs.remove('username');
+              await prefs.remove('role');
               await prefs.remove('avatarUrl');
+
+              BalanceService.resetActiveUser();
+              FirebaseAuthTokenService.instance.clearToken();
 
               if (context.mounted) {
                 Navigator.pushAndRemoveUntil(

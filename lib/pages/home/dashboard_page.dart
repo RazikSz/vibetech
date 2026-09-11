@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // Untuk status bar control
 import 'package:google_fonts/google_fonts.dart'; // Tipografi Modern
@@ -23,6 +21,7 @@ import 'package:vibetech_xyz/pages/payment/topup_page.dart';
 import 'package:vibetech_xyz/services/balance_service.dart';
 import 'package:vibetech_xyz/services/cloud_sync_service.dart';
 import 'package:vibetech_xyz/services/language_service.dart';
+import 'package:vibetech_xyz/services/notification_service.dart';
 import 'package:vibetech_xyz/services/theme_service.dart';
 
 /// ============================================================================
@@ -59,11 +58,7 @@ class _DashboardPageState extends State<DashboardPage>
   String _activeUsername = '';
   String _activeAvatarUrl = '';
   int _totalOrdersCount = 0;
-
-  // Floating particles
-  final List<AppParticle> _particles = [];
-  final math.Random _random = math.Random();
-  late AnimationController _particleController;
+  VoidCallback? _dashboardRealtimeListener;
 
   // Controllers & Animations
   late AnimationController _mainAnimationController;
@@ -90,17 +85,6 @@ class _DashboardPageState extends State<DashboardPage>
     _isDarkMode = ThemeService.isDarkMode;
     ThemeService.themeNotifier.addListener(_onThemeChanged);
 
-    // Inisialisasi Partikel Cyber
-    _particles.addAll(AppParticle.generateList(_random, count: 24));
-
-    _particleController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 10),
-    )..repeat();
-    _particleController.addListener(() {
-      AppParticle.updatePositions(_particles);
-    });
-
     // Durasi diperpanjang untuk mengakomodasi staggered animation
     _mainAnimationController = AnimationController(
       vsync: this,
@@ -120,6 +104,25 @@ class _DashboardPageState extends State<DashboardPage>
 
     _mainAnimationController.forward();
     _loadDashboardServicesFromDB();
+
+    // Hubungkan streaming listener real-time Firebase RTDB untuk pembaruan instan
+    _dashboardRealtimeListener = () {
+      if (mounted) {
+        _loadDashboardServicesFromDB();
+      }
+    };
+    CloudSyncService.instance.productsNotifier
+        .addListener(_dashboardRealtimeListener!);
+    CloudSyncService.instance.usersNotifier
+        .addListener(_dashboardRealtimeListener!);
+    CloudSyncService.instance.servicesNotifier
+        .addListener(_dashboardRealtimeListener!);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        NotificationService.requestNotificationPermission(context);
+      }
+    });
   }
 
   Future<void> _loadDashboardServicesFromDB() async {
@@ -245,10 +248,17 @@ class _DashboardPageState extends State<DashboardPage>
 
   @override
   void dispose() {
+    if (_dashboardRealtimeListener != null) {
+      CloudSyncService.instance.productsNotifier
+          .removeListener(_dashboardRealtimeListener!);
+      CloudSyncService.instance.usersNotifier
+          .removeListener(_dashboardRealtimeListener!);
+      CloudSyncService.instance.servicesNotifier
+          .removeListener(_dashboardRealtimeListener!);
+    }
     ThemeService.themeNotifier.removeListener(_onThemeChanged);
     _mainAnimationController.dispose();
     _pulseAnimationController.dispose();
-    _particleController.dispose();
     super.dispose();
   }
 
@@ -420,9 +430,37 @@ class _DashboardPageState extends State<DashboardPage>
                 },
               ),
             _buildProfileMenuItem(
-                Icons.security_rounded, '2FA Keamanan', 'Aktif'),
+              Icons.security_rounded,
+              LanguageService.text('2FA Keamanan', '2FA Security'),
+              LanguageService.text('Aktif', 'Active'),
+            ),
             _buildProfileMenuItem(
-                Icons.settings_outlined, 'Pengaturan Akun', ''),
+              Icons.settings_outlined,
+              LanguageService.text('Pengaturan Akun', 'Account Settings'),
+              '',
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ProfilePage(
+                      isDarkMode: _isDarkMode,
+                      username: _activeUsername.isNotEmpty
+                          ? _activeUsername
+                          : widget.username,
+                      initialEmail: _activeEmail,
+                      initialAvatarUrl: _activeAvatarUrl,
+                      initialRole: _currentUserRole,
+                    ),
+                  ),
+                ).then((_) {
+                  if (mounted) {
+                    setState(() => _isDarkMode = ThemeService.isDarkMode);
+                    _loadDashboardServicesFromDB();
+                  }
+                });
+              },
+            ),
           ],
         ),
       ),
@@ -520,11 +558,17 @@ class _DashboardPageState extends State<DashboardPage>
               username: _activeUsername.isNotEmpty
                   ? _activeUsername
                   : widget.username,
+              initialEmail: _activeEmail,
+              initialAvatarUrl: _activeAvatarUrl,
+              initialRole: _currentUserRole,
             ),
           ),
         );
         if (mounted) {
-          setState(() => _selectedIndex = 0);
+          setState(() {
+            _selectedIndex = 0;
+            _isDarkMode = ThemeService.isDarkMode;
+          });
           _loadDashboardServicesFromDB();
         }
         break;
@@ -579,17 +623,9 @@ class _DashboardPageState extends State<DashboardPage>
           if (_isDarkMode)
             AppNeonOrbs(pulseAnimation: _pulseAnimationController),
 
-          // 3. Floating Cyber Particle Canvas
+          // 3. Floating Cyber Particle Canvas (Animated & GPU-isolated)
           if (_isDarkMode)
-            AnimatedBuilder(
-              animation: _particleController,
-              builder: (context, child) {
-                return CustomPaint(
-                  size: MediaQuery.of(context).size,
-                  painter: AppParticlePainter(_particles),
-                );
-              },
-            ),
+            const CyberParticlesLayer(count: 16),
 
           // 4. Foreground SafeArea & Layout
           SafeArea(
@@ -860,42 +896,41 @@ class _DashboardPageState extends State<DashboardPage>
       children: [
         BounceTap(
           onTap: _showProfileDialog,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              SizedBox(
-                width: 70,
-                height: 70,
-                child: Lottie.network(
-                  "https://lottie.host/8018e6ff-4cb9-43c2-9e90-c24719b33a01/4M3l33K8Bv.json",
+          child: Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: const LinearGradient(
+                colors: [Color(0xFF00E5FF), AppColors.primary, AppColors.accent],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF00E5FF).withValues(alpha: 0.35),
+                  blurRadius: 8,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+            child: Container(
+              margin: const EdgeInsets.all(2.5),
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white,
+              ),
+              child: ClipOval(
+                child: Image(
+                  image: _activeAvatarUrl.isNotEmpty && _activeAvatarUrl.startsWith('http')
+                      ? NetworkImage(_activeAvatarUrl)
+                      : const AssetImage('assets/icon/logo.png') as ImageProvider,
                   fit: BoxFit.cover,
                   errorBuilder: (context, error, stackTrace) =>
-                      const SizedBox.shrink(),
+                      Image.asset('assets/icon/logo.png', fit: BoxFit.cover),
                 ),
               ),
-              Container(
-                width: 54,
-                height: 54,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                      colors: [AppColors.primary, AppColors.accent]),
-                ),
-                child: Container(
-                  margin: const EdgeInsets.all(2),
-                  decoration: const BoxDecoration(
-                      shape: BoxShape.circle, color: Colors.white),
-                  child: ClipOval(
-                    child: Image(
-                      image: NetworkImage(_activeAvatarUrl.isNotEmpty
-                          ? _activeAvatarUrl
-                          : "https://cdn.nekohime.site/file/5232n74c.jpeg"),
-                      fit: BoxFit.cover,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+            ),
           ),
         ),
         const SizedBox(width: 16),
