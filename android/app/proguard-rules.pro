@@ -1,36 +1,26 @@
 # ==============================================================================
 # PROGUARD / R8 RELEASE OPTIMIZATION RULES - VIBETECH XYZ
-# Tingkat Optimasi Maksimal (Tinggi / 100% Hijau) untuk Google Play Console
+# Tingkat Optimasi Maksimal (Tinggi / Hijau 100%) untuk Google Play Console
 # ==============================================================================
 
-# 1. OPTIMASI TINGKAT LANJUT & KEMAS ULANG KELAS (CLASS REPACKAGING)
-# Mengaktifkan fitur "Kemas Ulang Kelas" (Class Repackaging) agar checklist hijau di Play Console
-# Menghindari -overloadaggressively karena menyebabkan ART runtime de-optimasi / lagging pada HP
--optimizationpasses 2
+# 1. OPTIMASI TINGKAT LANJUT & PENYUSUTAN KODE AGRESIF
+# Mengaktifkan 5 passes optimasi agar persentase penyusutan & obfuscation mencapai level TINGGI (HIJAU)
+-optimizationpasses 5
 -repackageclasses ''
 -allowaccessmodification
 
-# Mencegah repackageclasses merusak paket Google, Firebase, Flutter, SQLite, Notifikasi, dan AndroidX (Mencegah runtime break & IPC break)
--keeppackagenames com.google.**
--keeppackagenames io.flutter.**
--keeppackagenames io.flutter.plugins.**
--keeppackagenames androidx.**
--keeppackagenames com.tekartik.**
--keeppackagenames com.dexterous.**
--keeppackagenames io.requery.**
--keeppackagenames com.github.dart_lang.**
--keeppackagenames com.raziek.vibetech_xyz.**
+# Mencegah repackaging merusak JNI dan package aplikasi root
+-keeppackagenames io.flutter.embedding.**
+-keeppackagenames com.raziek.vibetech_xyz
 
 # 2. ENTRY POINT APLIKASI FLUTTER UTAMA
 -keep class io.flutter.app.FlutterApplication { *; }
 -keep class io.flutter.embedding.android.FlutterActivity { *; }
 -keep class io.flutter.embedding.android.FlutterFragmentActivity { *; }
--keep class androidx.fragment.app.** { *; }
 -keep class io.flutter.plugins.GeneratedPluginRegistrant { *; }
 -keep class com.raziek.vibetech_xyz.MainActivity { *; }
 
-# 3. FLUTTER PLUGIN REGISTRATIONS (Presisi: Menjaga semua plugin Flutter tetap utuh)
--keep class io.flutter.plugins.** { *; }
+# 3. FLUTTER PLUGIN REGISTRATIONS (Presisi: Menjaga entry point plugin, membiarkan kelas internal di-shrink & di-obfuscate)
 -keep class * implements io.flutter.embedding.engine.plugins.FlutterPlugin {
     public void onAttachedToEngine(io.flutter.embedding.engine.plugins.FlutterPlugin$FlutterPluginBinding);
     public void onDetachedFromEngine(io.flutter.embedding.engine.plugins.FlutterPlugin$FlutterPluginBinding);
@@ -41,15 +31,23 @@
     public void onReattachedToActivityForConfigChanges(io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding);
     public void onDetachedFromActivityForConfigChanges();
 }
+-keep class * implements io.flutter.embedding.engine.plugins.service.ServiceAware {
+    public void onAttachedToService(io.flutter.embedding.engine.plugins.service.ServicePluginBinding);
+    public void onDetachedFromService();
+}
 
-# 4. METHOD CHANNEL INTEROP (Mencegah nama method channel terpotong)
+# 4. METHOD CHANNEL INTEROP (Menjaga interop komunikasi Dart-Java)
 -keep class io.flutter.plugin.common.MethodChannel { *; }
 -keep class io.flutter.plugin.common.BasicMessageChannel { *; }
 -keep class io.flutter.plugin.common.EventChannel { *; }
+-keep class io.flutter.plugin.common.StandardMessageCodec { *; }
+-keep class io.flutter.plugin.common.StandardMethodCodec { *; }
 
-# 5. NOTIFIKASI SISTEM & BIOMETRIC (Service & Receiver)
--keep class com.dexterous.flutterlocalnotifications.** { *; }
--keep class androidx.biometric.** { *; }
+# 5. NOTIFIKASI SISTEM & BIOMETRIK (Background Services & Receivers)
+-keep class com.dexterous.flutterlocalnotifications.** extends android.content.BroadcastReceiver { *; }
+-keep class com.dexterous.flutterlocalnotifications.** extends android.app.Service { *; }
+-keep class com.dexterous.flutterlocalnotifications.FlutterLocalNotificationsPlugin { *; }
+-keep class androidx.biometric.BiometricPrompt** { *; }
 
 # 6. PARCELABLE & SERIALIZABLE
 -keepclassmembers class * implements android.os.Parcelable {
@@ -69,6 +67,8 @@
 -keepclasseswithmembernames class * {
     native <methods>;
 }
+-keep class com.github.dart_lang.jni.** { *; }
+-keepclassmembers class com.github.dart_lang.jni.** { *; }
 
 # 8. ENUM VALUES
 -keepclassmembers enum * {
@@ -98,42 +98,33 @@
 -dontwarn kotlin.**
 -dontwarn kotlinx.coroutines.**
 
-# 11. PROTEKSI KELAS NATIVE & JNI DATABASE SQLITE DAN GOOGLE FIREBASE (PLAY STORE RELEASE HARDENING)
--keep class com.tekartik.sqflite.** { *; }
--keep class com.tekartik.** { *; }
--keep class androidx.sqlite.** { *; }
--keep class androidx.sqlite.db.** { *; }
--keep class androidx.sqlite.db.framework.** { *; }
--keep class io.requery.android.database.sqlite.** { *; }
--keep class android.database.sqlite.** { *; }
--keep class android.database.** { *; }
--keep class * extends android.database.sqlite.SQLiteOpenHelper { *; }
--keepclassmembers class * extends android.database.sqlite.SQLiteOpenHelper { *; }
--keep class * extends android.database.sqlite.SQLiteDatabase { *; }
--keepclassmembers class * extends android.database.sqlite.SQLiteDatabase { *; }
--keep class com.google.firebase.** { *; }
--keep class com.google.firebase.database.** { *; }
--keep class com.google.firebase.auth.** { *; }
--keep class com.google.firebase.firestore.** { *; }
--keep class io.flutter.plugins.firebase.** { *; }
--keep class com.google.android.gms.** { *; }
+# 11. PROTEKSI DATABASE SQLITE LOKAL (Zero Data Loss & Utuh 100%)
+-keep class com.tekartik.sqflite.SqflitePlugin { *; }
+-keep class * extends android.database.sqlite.SQLiteOpenHelper {
+    public <init>(...);
+    public void onCreate(android.database.sqlite.SQLiteDatabase);
+    public void onUpgrade(android.database.sqlite.SQLiteDatabase, int, int);
+    public void onOpen(android.database.sqlite.SQLiteDatabase);
+}
+-keep class * extends android.database.sqlite.SQLiteDatabase {
+    public long insert(...);
+    public int update(...);
+    public int delete(...);
+    public android.database.Cursor query(...);
+    public android.database.Cursor rawQuery(...);
+    public void execSQL(...);
+}
+
+# 12. FIREBASE & GOOGLE SIGN-IN MODEL ANNOTATIONS & ENTRYPOINTS
+-keep class com.google.firebase.auth.FirebaseAuth { *; }
+-keep class com.google.firebase.firestore.FirebaseFirestore { *; }
+-keep class com.google.firebase.database.** { @com.google.firebase.database.PropertyName <fields>; }
+-keep class androidx.sqlite.**
 -keepclassmembers class * {
     @com.google.firebase.database.PropertyName <fields>;
     @com.google.firebase.database.IgnoreExtraProperties <fields>;
     @com.google.firebase.database.Exclude <fields>;
 }
-
-# 12. PROTEKSI LENGKAP GOOGLE PLAY SERVICES & GOOGLE SIGN-IN (MENCEGAH ERROR APIEXCEPTION 10)
--keep class io.flutter.plugins.googlesignin.** { *; }
--keep class com.google.android.gms.auth.** { *; }
--keep class com.google.android.gms.auth.api.** { *; }
--keep class com.google.android.gms.auth.api.signin.** { *; }
--keep class com.google.android.gms.common.** { *; }
--keep class com.google.android.gms.common.api.** { *; }
--keep class com.google.android.gms.common.internal.** { *; }
--keep class com.google.android.gms.common.internal.safeparcel.** { *; }
--keep class com.google.android.gms.tasks.** { *; }
--keep interface com.google.android.gms.** { *; }
 -keep public class com.google.android.gms.common.internal.safeparcel.SafeParcelable {
     public static final *** NULL;
 }
@@ -141,35 +132,15 @@
 -keepclassmembers class * implements android.os.Parcelable {
     public static final ** CREATOR;
 }
--keep class androidx.credentials.** { *; }
--keep class androidx.credentials.playservices.** { *; }
 
-# 13. MODEL SERIALIZATION & DART/JNI DATA ENTITIES & PLUGINS
+# 13. MODEL SERIALIZATION METHODS
 -keepclassmembers class * {
     *** fromMap(...);
     *** toMap(...);
     *** fromJson(...);
     *** toJson(...);
 }
--keep class io.requery.android.database.sqlite.** { *; }
--keep class com.google.android.play.core.** { *; }
--keep class io.flutter.plugins.sharedpreferences.** { *; }
--keep class io.flutter.plugins.localauth.** { *; }
--keep class io.flutter.plugins.urllauncher.** { *; }
--keep class io.flutter.plugins.webviewflutter.** { *; }
--keep class android.webkit.** { *; }
+
+# 14. WEBVIEW & CLIENTS
 -keepclassmembers class * extends android.webkit.WebChromeClient { *; }
 -keepclassmembers class * extends android.webkit.WebViewClient { *; }
--keep class androidx.core.provider.FontsContractCompat { *; }
--keep class androidx.core.provider.FontRequest { *; }
--keep class com.airbnb.lottie.** { *; }
--keep class com.github.dart_lang.** { *; }
--keep class com.github.dart_lang.jni.** { *; }
--keepclassmembers class com.github.dart_lang.jni.** { *; }
-
-# 14. SQLITE DATABASE PERSISTENCE & DRIVER INTEGRITY
--keep class * implements com.tekartik.sqflite.** { *; }
--keep class com.tekartik.sqflite.Database { *; }
--keep class com.tekartik.sqflite.operation.** { *; }
--keepclassmembers class com.tekartik.sqflite.** { *; }
-
