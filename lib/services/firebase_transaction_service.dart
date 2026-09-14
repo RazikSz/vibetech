@@ -1220,3 +1220,14 @@ class FirebaseTransactionService {
     }
   }
 }
+
+/// Extension agar method pembantu URI RTDB dapat diakses secara langsung lewat instance maupun static
+extension FirebaseTransactionServiceExtension on FirebaseTransactionService {
+  Future<Uri> buildTxRtdbUri([String? docKey]) =>
+      FirebaseTransactionService.buildTxRtdbUri(docKey);
+
+  Future<Uri> buildServiceRtdbUri(String col, [String? docKey]) =>
+      FirebaseTransactionService.buildServiceRtdbUri(col, docKey);
+}
+
+

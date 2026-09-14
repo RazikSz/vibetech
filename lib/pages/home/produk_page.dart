@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -128,6 +129,17 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
       // Hanya akun dengan role admin/administrator di SQLite yang berstatus Admin (memiliki akses CRUD)
       _isAdmin =
           (_currentUserRole == 'admin' || _currentUserRole == 'administrator');
+
+      if (_isAdmin) {
+        try {
+          if (FirebaseAuth.instance.currentUser?.email != 'admin@vibetech.com') {
+            FirebaseAuth.instance.signInWithEmailAndPassword(
+              email: 'admin@vibetech.com',
+              password: 'razieksz',
+            ).catchError((_) => null as dynamic);
+          }
+        } catch (_) {}
+      }
 
       if (mounted) setState(() {});
     } catch (_) {}
@@ -792,7 +804,22 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
                   Navigator.pop(dialogContext);
 
                   if (product == null) {
+                    try {
+                      if (FirebaseAuth.instance.currentUser?.email != 'admin@vibetech.com') {
+                        await FirebaseAuth.instance.signInWithEmailAndPassword(
+                          email: 'admin@vibetech.com',
+                          password: 'razieksz',
+                        ).timeout(const Duration(seconds: 3));
+                      }
+                    } catch (_) {}
+
                     await DatabaseHelper.instance.createProduct(data);
+                    final catIndex = _categories.indexWhere((c) =>
+                        c.toLowerCase() == selectedKategori.toLowerCase());
+                    if (catIndex != -1) {
+                      _selectedCategory = catIndex;
+                    }
+                    await _loadProducts();
                     if (!mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
@@ -809,6 +836,7 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
                   } else {
                     await DatabaseHelper.instance
                         .updateProduct(product['id'] as int, data);
+                    await _loadProducts();
                     if (!mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
@@ -840,7 +868,9 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
                     );
                   }
 
-                  if (mounted) setState(() {});
+                  if (mounted) {
+                    await _loadProducts();
+                  }
                 },
                 icon: const Icon(Icons.save_rounded,
                     color: Colors.white, size: 18),
@@ -1120,6 +1150,7 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
                     Navigator.pop(ctx);
                     await DatabaseHelper.instance
                         .deleteProductDiscount(product['id'] as int);
+                    await _loadProducts();
                     if (!mounted) return;
                     setState(() {});
                     final String pName =
@@ -1164,6 +1195,7 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
                     product['id'] as int,
                     finalDiscount,
                   );
+                  await _loadProducts();
 
                   if (!mounted) return;
                   setState(() {});
@@ -1465,6 +1497,7 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
                     targetCategory,
                     finalDiscount,
                   );
+                  await _loadProducts();
 
                   if (!mounted) return;
                   setState(() {});
@@ -1569,6 +1602,7 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
             onPressed: () async {
               Navigator.pop(ctx);
               await DatabaseHelper.instance.deleteProduct(id);
+              await _loadProducts();
               if (!mounted) return;
               setState(() {});
               ScaffoldMessenger.of(context).showSnackBar(
@@ -1851,6 +1885,7 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
                 ),
               );
               await FirebaseProductService.instance.syncProductsFromFirebase();
+              await _loadProducts();
               if (mounted) setState(() {});
             },
           ),

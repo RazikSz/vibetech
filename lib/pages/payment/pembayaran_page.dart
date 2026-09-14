@@ -6,9 +6,6 @@ import 'package:intl/intl.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
-import 'package:webview_flutter/webview_flutter.dart';
-
 import '../../database/db_helper.dart';
 import '../../services/balance_service.dart';
 import '../../services/cart_service.dart';
@@ -373,13 +370,23 @@ class _PembayaranPageState extends State<PembayaranPage> {
     });
   }
 
-  void _completePaymentAndShowModal() async {
+  void _completePaymentAndShowModal() {
     if (_isPaymentCompleted) return;
     _timer?.cancel();
     setState(() {
       _isPaymentCompleted = true;
     });
 
+    // 🚀 1. LANGSUNG TAMPILKAN POPUP STRUK BERHASIL DENGAN INSTAN (ZERO DELAY)
+    if (mounted) {
+      _showGoPayStyleSuccessModal();
+    }
+
+    // 🚀 2. PROSES PERSISTENSI DATABASE, LAYANAN & NOTIFIKASI DI LATAR BELAKANG
+    _persistTransactionAndServices();
+  }
+
+  Future<void> _persistTransactionAndServices() async {
     final String namaProduk = widget.items.isNotEmpty
         ? widget.items
             .map((e) =>
@@ -395,154 +402,154 @@ class _PembayaranPageState extends State<PembayaranPage> {
     final String dateFormatted =
         DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now());
 
-    if (_currentTransactionDbId != null) {
-      await DatabaseHelper.instance.updateTransaction(
-        _currentTransactionDbId!,
-        {
-          'status': 'Selesai',
+    try {
+      if (_currentTransactionDbId != null) {
+        await DatabaseHelper.instance.updateTransaction(
+          _currentTransactionDbId!,
+          {
+            'status': 'Selesai',
+            'tanggal': dateFormatted,
+            'payment_method': _getPaymentName(),
+            'invoice_no': _generatedInvoiceNo,
+            'notes': notes,
+          },
+        );
+      } else {
+        _currentTransactionDbId =
+            await DatabaseHelper.instance.createTransaction({
+          'user_email': _currentUserEmail,
+          'nama_produk': namaProduk,
+          'jumlah': totalQty,
+          'total_harga': widget.totalAmount.toDouble(),
           'tanggal': dateFormatted,
+          'status': 'Selesai',
           'payment_method': _getPaymentName(),
           'invoice_no': _generatedInvoiceNo,
           'notes': notes,
-        },
-      );
-    } else {
-      _currentTransactionDbId =
-          await DatabaseHelper.instance.createTransaction({
-        'user_email': _currentUserEmail,
-        'nama_produk': namaProduk,
-        'jumlah': totalQty,
-        'total_harga': widget.totalAmount.toDouble(),
-        'tanggal': dateFormatted,
-        'status': 'Selesai',
-        'payment_method': _getPaymentName(),
-        'invoice_no': _generatedInvoiceNo,
-        'notes': notes,
-      });
-    }
-
-    // --- OTOMATISASI GENERATE DATA LAYANAN (VPS / PANEL HOSTING / BOT WA) ---
-    final now = DateTime.now();
-    for (var item in widget.items) {
-      final String name =
-          (item['name'] ?? item['title'] ?? 'Layanan VibeTech').toString();
-      final String type = item['type']?.toString().toLowerCase() ?? '';
-      final String nameLower = name.toLowerCase();
-      final String specs =
-          item['specs']?.toString() ?? 'Standard Specification';
-      final double price = (item['price'] as num?)?.toDouble() ?? 0.0;
-      final int qty = (item['quantity'] as num?)?.toInt() ?? 1;
-      final String expDate =
-          now.add(Duration(days: 30 * (qty > 0 ? qty : 1))).toIso8601String();
-      final String todayStr = now.toIso8601String();
-
-      String category = 'VPS';
-      String? ipAddress;
-      String? port;
-      String? username;
-      String? password;
-      String? serverUrl;
-      String? sessionId;
-      String? extraData;
-
-      if (nameLower.contains('vps') || type.contains('vps')) {
-        category = 'VPS';
-        final octet3 = 100 + (now.millisecond % 150);
-        final octet4 = 10 + (now.microsecond % 240);
-        ipAddress = '103.187.$octet3.$octet4';
-        port = '22';
-        username = 'root';
-        password =
-            'VibeVPS#${now.millisecondsSinceEpoch.toString().substring(7)}!';
-        extraData = 'OS: Ubuntu 22.04 LTS (SG-01 Node)';
-      } else if (nameLower.contains('panel') ||
-          nameLower.contains('hosting') ||
-          type.contains('panel')) {
-        category = 'Panel Hosting';
-        port = '8080';
-        serverUrl = 'https://panel.vibetech.xyz:8080';
-        username = 'vibe_${now.millisecondsSinceEpoch.toString().substring(8)}';
-        password =
-            'Panel@${now.millisecondsSinceEpoch.toString().substring(7)}';
-        extraData = 'Node: Singapore High-Speed (Pterodactyl)';
-      } else {
-        category = 'Bot WhatsApp';
-        sessionId =
-            'WA-SESSION-${now.millisecondsSinceEpoch.toString().substring(6)}';
-        final pairCode = 1000 + (now.millisecond % 9000);
-        extraData = 'PAIR-CODE: VBWA-$pairCode';
-        username = _currentUserEmail;
+        });
       }
 
-      await DatabaseHelper.instance.createService({
-        'user_email': _currentUserEmail,
-        'nama_produk':
-            '$name #${now.millisecondsSinceEpoch.toString().substring(8)}',
-        'kategori': category,
-        'harga': price * qty,
-        'tanggal_beli': todayStr,
-        'tanggal_kadaluarsa': expDate,
-        'status': 'Aktif',
-        'ip_address': ipAddress,
-        'port': port,
-        'username': username,
-        'password': password,
-        'server_url': serverUrl,
-        'session_id': sessionId,
-        'spesifikasi': specs,
-        'extra_data': extraData,
-      });
-    }
+      // --- OTOMATISASI GENERATE DATA LAYANAN (VPS / PANEL HOSTING / BOT WA) ---
+      final now = DateTime.now();
+      for (var item in widget.items) {
+        final String name =
+            (item['name'] ?? item['title'] ?? 'Layanan VibeTech').toString();
+        final String type = item['type']?.toString().toLowerCase() ?? '';
+        final String nameLower = name.toLowerCase();
+        final String specs =
+            item['specs']?.toString() ?? 'Standard Specification';
+        final double price = (item['price'] as num?)?.toDouble() ?? 0.0;
+        final int qty = (item['quantity'] as num?)?.toInt() ?? 1;
+        final String expDate =
+            now.add(Duration(days: 30 * (qty > 0 ? qty : 1))).toIso8601String();
+        final String todayStr = now.toIso8601String();
 
-    // Sinkronisasi saldo aktif dari SQLite Database
-    await BalanceService.loadUserBalance(_currentUserEmail);
+        String category = 'VPS';
+        String? ipAddress;
+        String? port;
+        String? username;
+        String? password;
+        String? serverUrl;
+        String? sessionId;
+        String? extraData;
 
-    // --- OTOMATISASI PENGIRIMAN NOTIFIKASI EMAIL & PUSH NOTIFIKASI PEMBELIAN ---
-    if (!mounted) return;
+        if (nameLower.contains('vps') || type.contains('vps')) {
+          category = 'VPS';
+          final octet3 = 100 + (now.millisecond % 150);
+          final octet4 = 10 + (now.microsecond % 240);
+          ipAddress = '103.187.$octet3.$octet4';
+          port = '22';
+          username = 'root';
+          password =
+              'VibeVPS#${now.millisecondsSinceEpoch.toString().substring(7)}!';
+          extraData = 'OS: Ubuntu 22.04 LTS (SG-01 Node)';
+        } else if (nameLower.contains('panel') ||
+            nameLower.contains('hosting') ||
+            type.contains('panel')) {
+          category = 'Panel Hosting';
+          port = '8080';
+          serverUrl = 'https://panel.vibetech.xyz:8080';
+          username = 'vibe_${now.millisecondsSinceEpoch.toString().substring(8)}';
+          password =
+              'Panel@${now.millisecondsSinceEpoch.toString().substring(7)}';
+          extraData = 'Node: Singapore High-Speed (Pterodactyl)';
+        } else {
+          category = 'Bot WhatsApp';
+          sessionId =
+              'WA-SESSION-${now.millisecondsSinceEpoch.toString().substring(6)}';
+          final pairCode = 1000 + (now.millisecond % 9000);
+          extraData = 'PAIR-CODE: VBWA-$pairCode';
+          username = _currentUserEmail;
+        }
 
-    final String userEmailTarget = _currentUserEmail.isNotEmpty
-        ? _currentUserEmail
-        : 'customer@vibetech.xyz';
-    final String formattedPrice = NumberFormat.currency(
-      locale: 'id_ID',
-      symbol: 'Rp ',
-      decimalDigits: 0,
-    ).format(widget.totalAmount);
+        await DatabaseHelper.instance.createService({
+          'user_email': _currentUserEmail,
+          'nama_produk':
+              '$name #${now.millisecondsSinceEpoch.toString().substring(8)}',
+          'kategori': category,
+          'harga': price * qty,
+          'tanggal_beli': todayStr,
+          'tanggal_kadaluarsa': expDate,
+          'status': 'Aktif',
+          'ip_address': ipAddress,
+          'port': port,
+          'username': username,
+          'password': password,
+          'server_url': serverUrl,
+          'session_id': sessionId,
+          'spesifikasi': specs,
+          'extra_data': extraData,
+        });
+      }
 
-    NotificationService.sendEmailNotification(
-      context,
-      toEmail: userEmailTarget,
-      subject: 'Bukti Pembayaran & Aktivasi Layanan: $_generatedInvoiceNo',
-      message:
-          'Halo ${userEmailTarget.split('@').first},\n\nTerima kasih telah berbelanja di VibeTech XYZ! Pembayaran pesanan Anda telah berhasil diverifikasi secara instan.\n\nDetail Produk: $namaProduk\nMetode Pembayaran: ${_getPaymentName()}\nNomor Invoice: $_generatedInvoiceNo\nTotal Pembayaran: $formattedPrice\nTanggal: ${DateFormat('dd MMMM yyyy, HH:mm').format(DateTime.now())} WIB\n\nLayanan Anda telah otomatis diaktifkan dan dapat dikelola langsung melalui menu Data Layanan di aplikasi.',
-      category: 'Invoice & Pembelian',
-      orderId: _generatedInvoiceNo,
-      amount: formattedPrice,
-      showPopupImmediately: false,
-    );
+      // Sinkronisasi saldo aktif dari SQLite Database
+      await BalanceService.loadUserBalance(_currentUserEmail);
 
-    NotificationService.showInAppNotification(
-      context,
-      title: 'Pembayaran Sukses! 🎉',
-      message:
-          'Layanan $namaProduk aktif. Ketuk untuk melihat bukti surat invoice $userEmailTarget.',
-      type: 'payment',
-      onTap: () {
-        NotificationService.showEmailNotificationModal(
-          context,
-          toEmail: userEmailTarget,
-          subject: 'Bukti Pembayaran & Aktivasi Layanan: $_generatedInvoiceNo',
-          message:
-              'Halo ${userEmailTarget.split('@').first},\n\nTerima kasih telah berbelanja di VibeTech XYZ! Pembayaran pesanan Anda telah berhasil diverifikasi secara instan.\n\nDetail Produk: $namaProduk\nMetode Pembayaran: ${_getPaymentName()}\nNomor Invoice: $_generatedInvoiceNo\nTotal Pembayaran: $formattedPrice\nTanggal: ${DateFormat('dd MMMM yyyy, HH:mm').format(DateTime.now())} WIB\n\nLayanan Anda telah otomatis diaktifkan dan dapat dikelola langsung melalui menu Data Layanan di aplikasi.',
-          category: 'Invoice & Pembelian',
-          orderId: _generatedInvoiceNo,
-          amount: formattedPrice,
-        );
-      },
-    );
+      // --- OTOMATISASI PENGIRIMAN NOTIFIKASI EMAIL & PUSH NOTIFIKASI PEMBELIAN ---
+      if (!mounted) return;
 
-    if (mounted) {
-      _showGoPayStyleSuccessModal();
+      final String userEmailTarget = _currentUserEmail.isNotEmpty
+          ? _currentUserEmail
+          : 'customer@vibetech.xyz';
+      final String formattedPrice = NumberFormat.currency(
+        locale: 'id_ID',
+        symbol: 'Rp ',
+        decimalDigits: 0,
+      ).format(widget.totalAmount);
+
+      NotificationService.sendEmailNotification(
+        context,
+        toEmail: userEmailTarget,
+        subject: 'Bukti Pembayaran & Aktivasi Layanan: $_generatedInvoiceNo',
+        message:
+            'Halo ${userEmailTarget.split('@').first},\n\nTerima kasih telah berbelanja di VibeTech XYZ! Pembayaran pesanan Anda telah berhasil diverifikasi secara instan.\n\nDetail Produk: $namaProduk\nMetode Pembayaran: ${_getPaymentName()}\nNomor Invoice: $_generatedInvoiceNo\nTotal Pembayaran: $formattedPrice\nTanggal: ${DateFormat('dd MMMM yyyy, HH:mm').format(DateTime.now())} WIB\n\nLayanan Anda telah otomatis diaktifkan dan dapat dikelola langsung melalui menu Data Layanan di aplikasi.',
+        category: 'Invoice & Pembelian',
+        orderId: _generatedInvoiceNo,
+        amount: formattedPrice,
+        showPopupImmediately: false,
+      );
+
+      NotificationService.showInAppNotification(
+        context,
+        title: 'Pembayaran Sukses! 🎉',
+        message:
+            'Layanan $namaProduk aktif. Ketuk untuk melihat bukti surat invoice $userEmailTarget.',
+        type: 'payment',
+        onTap: () {
+          NotificationService.showEmailNotificationModal(
+            context,
+            toEmail: userEmailTarget,
+            subject: 'Bukti Pembayaran & Aktivasi Layanan: $_generatedInvoiceNo',
+            message:
+                'Halo ${userEmailTarget.split('@').first},\n\nTerima kasih telah berbelanja di VibeTech XYZ! Pembayaran pesanan Anda telah berhasil diverifikasi secara instan.\n\nDetail Produk: $namaProduk\nMetode Pembayaran: ${_getPaymentName()}\nNomor Invoice: $_generatedInvoiceNo\nTotal Pembayaran: $formattedPrice\nTanggal: ${DateFormat('dd MMMM yyyy, HH:mm').format(DateTime.now())} WIB\n\nLayanan Anda telah otomatis diaktifkan dan dapat dikelola langsung melalui menu Data Layanan di aplikasi.',
+            category: 'Invoice & Pembelian',
+            orderId: _generatedInvoiceNo,
+            amount: formattedPrice,
+          );
+        },
+      );
+    } catch (e) {
+      debugPrint('[PembayaranPage] Error async persisting transaction: $e');
     }
   }
 
@@ -629,7 +636,12 @@ class _PembayaranPageState extends State<PembayaranPage> {
         isDarkMode: widget.isDarkMode,
       );
 
-      if (isSuccess == true) {
+      bool isPaid = (isSuccess == true);
+      if (!isPaid) {
+        isPaid = await MidtransDirectPaymentService.verifyPaymentStatus(_lastDirectPaymentResult!.orderId);
+      }
+
+      if (isPaid) {
         _completePaymentAndShowModal();
       }
       return;
@@ -679,7 +691,12 @@ class _PembayaranPageState extends State<PembayaranPage> {
         isDarkMode: widget.isDarkMode,
       );
 
-      if (isSuccess == true) {
+      bool isPaid = (isSuccess == true);
+      if (!isPaid) {
+        isPaid = await MidtransDirectPaymentService.verifyPaymentStatus(directResult.orderId);
+      }
+
+      if (isPaid) {
         _completePaymentAndShowModal();
       }
     } else {
@@ -2056,91 +2073,6 @@ class _PembayaranPageState extends State<PembayaranPage> {
       default:
         return 'Metode Pembayaran';
     }
-  }
-}
-
-// --- CLASS WEBVIEW MIDTRANS DETEKSI KETAT ---
-class PaymentWebViewPage extends StatefulWidget {
-  final String paymentUrl;
-
-  const PaymentWebViewPage({super.key, required this.paymentUrl});
-
-  @override
-  State<PaymentWebViewPage> createState() => _PaymentWebViewPageState();
-}
-
-class _PaymentWebViewPageState extends State<PaymentWebViewPage> {
-  late final WebViewController _controller;
-  bool _isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    Future.delayed(const Duration(seconds: 4), () {
-      if (mounted && _isLoading) setState(() => _isLoading = false);
-    });
-    _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onPageStarted: (String url) {
-            if (mounted) setState(() => _isLoading = true);
-            _checkPaymentStatus(url);
-          },
-          onPageFinished: (String url) {
-            if (mounted) setState(() => _isLoading = false);
-            _checkPaymentStatus(url);
-          },
-          onWebResourceError: (WebResourceError error) {
-            if (mounted) setState(() => _isLoading = false);
-          },
-          onNavigationRequest: (NavigationRequest request) {
-            final url = request.url;
-            _checkPaymentStatus(url);
-            if (url.startsWith('gojek://') ||
-                url.startsWith('shopeeid://') ||
-                url.startsWith('dana://') ||
-                url.startsWith('ovo://') ||
-                url.startsWith('bca://') ||
-                url.startsWith('intent://') ||
-                (!url.startsWith('http://') && !url.startsWith('https://'))) {
-              try {
-                launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-              } catch (_) {}
-              return NavigationDecision.prevent;
-            }
-            return NavigationDecision.navigate;
-          },
-        ),
-      )
-      ..loadRequest(Uri.parse(widget.paymentUrl));
-  }
-
-  void _checkPaymentStatus(String url) {
-    if (url.contains('status_code=200') ||
-        url.contains('transaction_status=settlement') ||
-        url.contains('transaction_status=capture')) {
-      Navigator.pop(context, true);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Proses Pembayaran'),
-        leading: IconButton(
-          icon: const Icon(Icons.close),
-          onPressed: () => Navigator.pop(context, false),
-        ),
-      ),
-      body: Stack(
-        children: [
-          WebViewWidget(controller: _controller),
-          if (_isLoading) const Center(child: CircularProgressIndicator()),
-        ],
-      ),
-    );
   }
 }
 

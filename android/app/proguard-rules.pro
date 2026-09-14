@@ -18,6 +18,8 @@
 -keeppackagenames com.tekartik.**
 -keeppackagenames com.dexterous.**
 -keeppackagenames io.requery.**
+-keeppackagenames com.github.dart_lang.**
+-keeppackagenames com.raziek.vibetech_xyz.**
 
 # 2. ENTRY POINT APLIKASI FLUTTER UTAMA
 -keep class io.flutter.app.FlutterApplication { *; }
@@ -161,4 +163,13 @@
 -keep class androidx.core.provider.FontsContractCompat { *; }
 -keep class androidx.core.provider.FontRequest { *; }
 -keep class com.airbnb.lottie.** { *; }
+-keep class com.github.dart_lang.** { *; }
+-keep class com.github.dart_lang.jni.** { *; }
+-keepclassmembers class com.github.dart_lang.jni.** { *; }
+
+# 14. SQLITE DATABASE PERSISTENCE & DRIVER INTEGRITY
+-keep class * implements com.tekartik.sqflite.** { *; }
+-keep class com.tekartik.sqflite.Database { *; }
+-keep class com.tekartik.sqflite.operation.** { *; }
+-keepclassmembers class com.tekartik.sqflite.** { *; }
 

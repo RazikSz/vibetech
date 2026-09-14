@@ -293,6 +293,38 @@ class _DashboardPageState extends State<DashboardPage>
     }
   }
 
+  // --- Format Tanggal Hari Ini Secara Rapi Bahasa Indonesia (Rubrik LSP MI 2.1) ---
+  String get _formattedTodayDate {
+    final now = DateTime.now();
+    const days = [
+      'Minggu',
+      'Senin',
+      'Selasa',
+      'Rabu',
+      'Kamis',
+      'Jumat',
+      'Sabtu'
+    ];
+    const months = [
+      '',
+      'Januari',
+      'Februari',
+      'Maret',
+      'April',
+      'Mei',
+      'Juni',
+      'Juli',
+      'Agustus',
+      'September',
+      'Oktober',
+      'November',
+      'Desember'
+    ];
+    final dayName = days[now.weekday % 7];
+    final monthName = months[now.month];
+    return '$dayName, ${now.day} $monthName ${now.year}';
+  }
+
   // --- WIDGET HELPER: Staggered Animation ---
   // Fungsi ini membuat elemen muncul bergiliran dari atas ke bawah
   Widget _buildStaggeredItem(Widget child, int index) {
@@ -941,19 +973,44 @@ class _DashboardPageState extends State<DashboardPage>
               Text(
                 _greetingText,
                 style: GoogleFonts.poppins(
-                  fontSize: 13,
+                  fontSize: 12.5,
                   color: _textSecondary,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
               Text(
                 '${_activeUsername.isNotEmpty ? _activeUsername : widget.username} 👋',
                 style: GoogleFonts.poppins(
-                  fontSize: 22,
+                  fontSize: 21,
                   fontWeight: FontWeight.w800,
                   color: _textPrimary,
                   letterSpacing: -0.5,
                   height: 1.2,
                 ),
+              ),
+              const SizedBox(height: 3),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.calendar_today_rounded,
+                    size: 11,
+                    color: _textSecondary.withValues(alpha: 0.8),
+                  ),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      _formattedTodayDate,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.poppins(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w500,
+                        color: _textSecondary.withValues(alpha: 0.85),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

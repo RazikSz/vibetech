@@ -1244,15 +1244,13 @@ class DatabaseHelper {
     newProduct['id'] = res;
     _cachedProducts = [newProduct, ..._cachedProducts];
     if (FirebaseRealtimeListenerService.isApplyingCloudUpdate) return res;
-    Future.microtask(() async {
-      try {
-        final syncData = Map<String, dynamic>.from(productData);
-        syncData['id'] = res;
-        await FirebaseProductService.instance.saveProductToFirebase(syncData);
-      } catch (e) {
-        debugPrint('[DatabaseHelper] Auto-sync createProduct ke Firebase: $e');
-      }
-    });
+    try {
+      final syncData = Map<String, dynamic>.from(productData);
+      syncData['id'] = res;
+      await FirebaseProductService.instance.saveProductToFirebase(syncData);
+    } catch (e) {
+      debugPrint('[DatabaseHelper] Auto-sync createProduct ke Firebase: $e');
+    }
     return res;
   }
 
@@ -1280,14 +1278,12 @@ class DatabaseHelper {
       return p;
     }).toList();
     if (FirebaseRealtimeListenerService.isApplyingCloudUpdate) return res;
-    Future.microtask(() async {
-      try {
-        await FirebaseProductService.instance
-            .updateProductInFirebase(id, productData);
-      } catch (e) {
-        debugPrint('[DatabaseHelper] Auto-sync updateProduct ke Firebase: $e');
-      }
-    });
+    try {
+      await FirebaseProductService.instance
+          .updateProductInFirebase(id, productData);
+    } catch (e) {
+      debugPrint('[DatabaseHelper] Auto-sync updateProduct ke Firebase: $e');
+    }
     return res;
   }
 
@@ -1296,13 +1292,11 @@ class DatabaseHelper {
     final res = await db.delete('products', where: 'id = ?', whereArgs: [id]);
     _cachedProducts = _cachedProducts.where((p) => p['id'] != id).toList();
     if (FirebaseRealtimeListenerService.isApplyingCloudUpdate) return res;
-    Future.microtask(() async {
-      try {
-        await FirebaseProductService.instance.deleteProductFromFirebase(id);
-      } catch (e) {
-        debugPrint('[DatabaseHelper] Auto-sync deleteProduct ke Firebase: $e');
-      }
-    });
+    try {
+      await FirebaseProductService.instance.deleteProductFromFirebase(id);
+    } catch (e) {
+      debugPrint('[DatabaseHelper] Auto-sync deleteProduct ke Firebase: $e');
+    }
     return res;
   }
 

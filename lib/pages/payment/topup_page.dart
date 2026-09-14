@@ -910,15 +910,17 @@ class _TopUpPageState extends State<TopUpPage>
 
       if (!mounted) return;
 
+      final activeOrderId = directResult.orderId;
+
       bool verified = false;
       if (isSuccess == true) {
         verified = true;
       } else {
-        verified = await MidtransDirectPaymentService.verifyPaymentStatus(invoiceNo);
+        verified = await MidtransDirectPaymentService.verifyPaymentStatus(activeOrderId);
       }
 
       if (verified) {
-        await _finalizeTopUpSuccess(amount, 'Midtrans ($methodName)', invoiceNo);
+        await _finalizeTopUpSuccess(amount, 'Midtrans ($methodName)', activeOrderId);
       } else {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -935,11 +937,11 @@ class _TopUpPageState extends State<TopUpPage>
               label: LanguageService.text('Cek Ulang', 'Retry'),
               textColor: AppColors.accent,
               onPressed: () async {
-                final recheck = await MidtransDirectPaymentService.verifyPaymentStatus(invoiceNo);
+                final recheck = await MidtransDirectPaymentService.verifyPaymentStatus(activeOrderId);
                 if (!mounted) return;
                 if (recheck) {
                   await _finalizeTopUpSuccess(
-                      amount, 'Midtrans ($methodName)', invoiceNo);
+                      amount, 'Midtrans ($methodName)', activeOrderId);
                 } else {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
@@ -987,6 +989,11 @@ class _TopUpPageState extends State<TopUpPage>
       return;
     }
     _finalizedInvoices.add(invoiceNo);
+
+    // 🚀 TAMPILKAN DIALOG SUKSES INSTAN (ZERO DELAY)
+    if (mounted) {
+      _showTopUpSuccessDialog(amount, methodName, invoiceNo);
+    }
 
     // 1. Tambahkan saldo ke BalanceService & Database SQLite untuk akun aktif
     await BalanceService.addBalance(amount, emailOrUsername: _activeEmail);
@@ -1049,9 +1056,6 @@ class _TopUpPageState extends State<TopUpPage>
         );
       },
     );
-
-    // Tampilkan dialog sukses
-    _showTopUpSuccessDialog(amount, methodName, invoiceNo);
   }
 
   Widget _buildInstructionStep(String stepNumber, String text) {

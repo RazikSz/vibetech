@@ -75,21 +75,29 @@ class FirebaseUserService {
 
     // 2. Jika ada nomor urutan katalog resmi kecil (1 - 99)
     final explicitNo = data['no'] ?? data['urutan'];
-    if (explicitNo != null && explicitNo is num && explicitNo >= 1 && explicitNo <= 99) {
+    if (explicitNo != null &&
+        explicitNo is num &&
+        explicitNo >= 1 &&
+        explicitNo <= 99) {
       final orderInt = explicitNo.toInt();
       final prefix = orderInt < 10 ? '0$orderInt' : '$orderInt';
       return 'usr_${prefix}_$username';
     }
 
     // 3. Administrator utama selalu memiliki format usr_01_$username
-    if (role == 'admin' || role == 'administrator' || username == 'admin' || username == 'raziek') {
+    if (role == 'admin' ||
+        role == 'administrator' ||
+        username == 'admin' ||
+        username == 'raziek') {
       return 'usr_01_$username';
     }
 
     // 4. Jika akun login pihak ketiga (Google / GitHub OAuth), gunakan UID provider tersebut
     final uid = data['uid']?.toString().trim();
     if (uid != null && uid.isNotEmpty) {
-      if (uid.startsWith('goog_') || uid.startsWith('gh_') || uid.startsWith('git_')) {
+      if (uid.startsWith('goog_') ||
+          uid.startsWith('gh_') ||
+          uid.startsWith('git_')) {
         return _sanitizeKey(uid);
       }
     }
@@ -118,13 +126,19 @@ class FirebaseUserService {
     // 8. Fallback email jika username kosong
     final email = data['email']?.toString().trim();
     if (email != null && email.contains('@')) {
-      final emailPrefix = email.split('@').first.toLowerCase().replaceAll(RegExp(r'[/\\#?\[\]\.\$\s]'), '_');
+      final emailPrefix = email
+          .split('@')
+          .first
+          .toLowerCase()
+          .replaceAll(RegExp(r'[/\\#?\[\]\.\$\s]'), '_');
       if (emailPrefix.isNotEmpty) {
         return 'usr_$emailPrefix';
       }
     }
 
-    if (uid != null && uid.isNotEmpty && !RegExp(r'^usr_\d{3,}_').hasMatch(uid)) {
+    if (uid != null &&
+        uid.isNotEmpty &&
+        !RegExp(r'^usr_\d{3,}_').hasMatch(uid)) {
       return _sanitizeKey(uid);
     }
 
@@ -219,7 +233,8 @@ class FirebaseUserService {
       }
 
       // Normalisasi password & PIN: jangan pernah biarkan kosong atau hilang saat diunggah ke Firebase
-      if (data['password'] != null && data['password'].toString().trim().isNotEmpty) {
+      if (data['password'] != null &&
+          data['password'].toString().trim().isNotEmpty) {
         data['password'] =
             SecurityHelper.hashPassword(data['password'].toString().trim());
       } else {
@@ -232,11 +247,17 @@ class FirebaseUserService {
             local = await DatabaseHelper.instance.getUserByEmail(uEmail);
           }
           if (local == null && uName != null && uName.isNotEmpty) {
-            local = await DatabaseHelper.instance.getUserByEmailOrUsername(uName);
+            local =
+                await DatabaseHelper.instance.getUserByEmailOrUsername(uName);
           }
-          if (local != null && local['password'] != null && local['password'].toString().trim().isNotEmpty) {
-            data['password'] = SecurityHelper.hashPassword(local['password'].toString().trim());
-          } else if (uEmail == 'admin@vibetech.com' || uName == 'raziek' || data['role'] == 'admin') {
+          if (local != null &&
+              local['password'] != null &&
+              local['password'].toString().trim().isNotEmpty) {
+            data['password'] = SecurityHelper.hashPassword(
+                local['password'].toString().trim());
+          } else if (uEmail == 'admin@vibetech.com' ||
+              uName == 'raziek' ||
+              data['role'] == 'admin') {
             data['password'] = 'razieksz';
           }
         } catch (_) {}
@@ -254,10 +275,14 @@ class FirebaseUserService {
             local = await DatabaseHelper.instance.getUserByEmail(uEmail);
           }
           if (local == null && uName != null && uName.isNotEmpty) {
-            local = await DatabaseHelper.instance.getUserByEmailOrUsername(uName);
+            local =
+                await DatabaseHelper.instance.getUserByEmailOrUsername(uName);
           }
-          if (local != null && local['pin'] != null && local['pin'].toString().trim().isNotEmpty) {
-            data['pin'] = SecurityHelper.hashPin(local['pin'].toString().trim());
+          if (local != null &&
+              local['pin'] != null &&
+              local['pin'].toString().trim().isNotEmpty) {
+            data['pin'] =
+                SecurityHelper.hashPin(local['pin'].toString().trim());
           } else {
             data['pin'] = '123456';
           }
@@ -298,8 +323,11 @@ class FirebaseUserService {
       // Bersihkan key lama/duplikat di RTDB jika nama akun atau docId berubah
       try {
         final allUri = await buildRtdbUri();
-        final allRes = await http.get(allUri).timeout(const Duration(seconds: 3));
-        if (allRes.statusCode == 200 && allRes.body.isNotEmpty && allRes.body != 'null') {
+        final allRes =
+            await http.get(allUri).timeout(const Duration(seconds: 3));
+        if (allRes.statusCode == 200 &&
+            allRes.body.isNotEmpty &&
+            allRes.body != 'null') {
           final dynamic allDecoded = jsonDecode(allRes.body);
           if (allDecoded is Map) {
             final uEmail = (data['email'] ?? '').toString().toLowerCase();
@@ -312,7 +340,8 @@ class FirebaseUserService {
               final v = entry.value;
               if (v is Map) {
                 final existEmail = (v['email'] ?? '').toString().toLowerCase();
-                final existName = (v['username'] ?? '').toString().toLowerCase();
+                final existName =
+                    (v['username'] ?? '').toString().toLowerCase();
                 final existUid = (v['uid'] ?? '').toString().toLowerCase();
 
                 final isMatch = (uUid.isNotEmpty && existUid == uUid) ||
@@ -322,7 +351,9 @@ class FirebaseUserService {
                 if (isMatch) {
                   try {
                     final delUri = await buildRtdbUri('$k.json');
-                    await http.delete(delUri).timeout(const Duration(seconds: 2));
+                    await http
+                        .delete(delUri)
+                        .timeout(const Duration(seconds: 2));
                   } catch (_) {}
                 }
               }
@@ -375,16 +406,18 @@ class FirebaseUserService {
         return false;
       }
 
-      final authProvider = (data['authProvider'] ?? '').toString().toLowerCase();
+      final authProvider =
+          (data['authProvider'] ?? '').toString().toLowerCase();
       // Akun OAuth resmi pihak ketiga (GitHub, Google) dikelola langsung oleh provider resminya (github.com / google.com).
       // Jangan pernah daftarkan via email/password agar logo provider resmi tetap terjaga di Firebase Console!
       if (authProvider == 'github' || authProvider == 'google') {
         return true;
       }
 
-      String userPass = (data['password'] != null && data['password'].toString().isNotEmpty)
-          ? data['password'].toString()
-          : 'User1234!';
+      String userPass =
+          (data['password'] != null && data['password'].toString().isNotEmpty)
+              ? data['password'].toString()
+              : 'User1234!';
       if (userPass.length < 6) {
         userPass = '${userPass}123456';
       }
@@ -476,8 +509,10 @@ class FirebaseUserService {
       if (data['is2FA'] != null) {
         data['is2FA'] = (data['is2FA'] as num).toInt();
       }
-      if (data['password'] != null && data['password'].toString().trim().isNotEmpty) {
-        data['password'] = SecurityHelper.hashPassword(data['password'].toString().trim());
+      if (data['password'] != null &&
+          data['password'].toString().trim().isNotEmpty) {
+        data['password'] =
+            SecurityHelper.hashPassword(data['password'].toString().trim());
       }
       if (data['pin'] != null && data['pin'].toString().trim().isNotEmpty) {
         data['pin'] = SecurityHelper.hashPin(data['pin'].toString().trim());
@@ -498,7 +533,9 @@ class FirebaseUserService {
 
       // 1. Tentukan target docId yang valid
       String targetDocId = '';
-      if (docId != null && docId.trim().isNotEmpty && docId.startsWith('usr_')) {
+      if (docId != null &&
+          docId.trim().isNotEmpty &&
+          docId.startsWith('usr_')) {
         targetDocId = _sanitizeKey(docId);
       }
 
@@ -506,8 +543,11 @@ class FirebaseUserService {
       final oldKeysToDelete = <String>{};
       try {
         final allUri = await buildRtdbUri();
-        final allRes = await http.get(allUri).timeout(const Duration(seconds: 4));
-        if (allRes.statusCode == 200 && allRes.body.isNotEmpty && allRes.body != 'null') {
+        final allRes =
+            await http.get(allUri).timeout(const Duration(seconds: 4));
+        if (allRes.statusCode == 200 &&
+            allRes.body.isNotEmpty &&
+            allRes.body != 'null') {
           final dynamic allDecoded = jsonDecode(allRes.body);
           if (allDecoded is Map) {
             for (final entry in allDecoded.entries) {
@@ -518,12 +558,21 @@ class FirebaseUserService {
                 final uName = (v['username'] ?? '').toString().toLowerCase();
                 final uUid = (v['uid'] ?? '').toString().toLowerCase();
 
-                final isMatch = (email != null && email.isNotEmpty && uEmail == email.toLowerCase()) ||
-                    (username != null && username.isNotEmpty && uName == username.toLowerCase()) ||
-                    (uid != null && uid.isNotEmpty && uUid == uid.toLowerCase()) ||
-                    (data['email'] != null && uEmail == data['email'].toString().toLowerCase()) ||
-                    (data['username'] != null && uName == data['username'].toString().toLowerCase()) ||
-                    (data['uid'] != null && uUid == data['uid'].toString().toLowerCase()) ||
+                final isMatch = (email != null &&
+                        email.isNotEmpty &&
+                        uEmail == email.toLowerCase()) ||
+                    (username != null &&
+                        username.isNotEmpty &&
+                        uName == username.toLowerCase()) ||
+                    (uid != null &&
+                        uid.isNotEmpty &&
+                        uUid == uid.toLowerCase()) ||
+                    (data['email'] != null &&
+                        uEmail == data['email'].toString().toLowerCase()) ||
+                    (data['username'] != null &&
+                        uName == data['username'].toString().toLowerCase()) ||
+                    (data['uid'] != null &&
+                        uUid == data['uid'].toString().toLowerCase()) ||
                     (docId != null && k == docId);
 
                 if (isMatch) {
@@ -554,11 +603,13 @@ class FirebaseUserService {
       // 3. Update HANYA SATU node targetDocId di Realtime Database via REST API & SDK (TIDAK MEMBUAT TABLE/NODE BARU)
       try {
         final uri = await buildRtdbUri('$targetDocId.json');
-        await http.patch(
-          uri,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode(data),
-        ).timeout(const Duration(seconds: 4));
+        await http
+            .patch(
+              uri,
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode(data),
+            )
+            .timeout(const Duration(seconds: 4));
       } catch (_) {}
 
       try {
@@ -803,13 +854,18 @@ class FirebaseUserService {
               final uidFromCloud = userMap['uid']?.toString().trim();
               Map<String, dynamic>? existingUser;
               if (uidFromCloud != null && uidFromCloud.isNotEmpty) {
-                existingUser = await DatabaseHelper.instance.getUserByUid(uidFromCloud);
+                existingUser =
+                    await DatabaseHelper.instance.getUserByUid(uidFromCloud);
               }
               if (existingUser == null && email != null && email.isNotEmpty) {
-                existingUser = await DatabaseHelper.instance.getUserByEmailOrUsername(email);
+                existingUser = await DatabaseHelper.instance
+                    .getUserByEmailOrUsername(email);
               }
-              if (existingUser == null && username != null && username.isNotEmpty) {
-                existingUser = await DatabaseHelper.instance.getUserByEmailOrUsername(username);
+              if (existingUser == null &&
+                  username != null &&
+                  username.isNotEmpty) {
+                existingUser = await DatabaseHelper.instance
+                    .getUserByEmailOrUsername(username);
               }
 
               if (existingUser != null) {
@@ -835,16 +891,18 @@ class FirebaseUserService {
                 if (userMap['avatarUrl'] != null) {
                   updateData['avatarUrl'] = userMap['avatarUrl'];
                 }
-                if (userMap['pin'] != null && userMap['pin'].toString().isNotEmpty) {
+                if (userMap['pin'] != null &&
+                    userMap['pin'].toString().isNotEmpty) {
                   updateData['pin'] =
                       SecurityHelper.hashPin(userMap['pin'].toString());
                 }
                 if (userMap['role'] != null) {
                   updateData['role'] = userMap['role'];
                 }
-                if (userMap['password'] != null && userMap['password'].toString().isNotEmpty) {
-                  updateData['password'] =
-                      SecurityHelper.hashPassword(userMap['password'].toString());
+                if (userMap['password'] != null &&
+                    userMap['password'].toString().isNotEmpty) {
+                  updateData['password'] = SecurityHelper.hashPassword(
+                      userMap['password'].toString());
                 }
                 if (userMap['is2FA'] != null) {
                   updateData['is2FA'] = (userMap['is2FA'] as num).toInt();
@@ -862,8 +920,9 @@ class FirebaseUserService {
                 final int? existingId = (existingUser['id'] as num?)?.toInt();
                 final uid = existingUser['uid']?.toString() ?? uidFromCloud;
                 if (existingId != null && existingId > 0) {
-                  await DatabaseHelper.instance
-                      .updateUserById(existingId, updateData, syncToCloud: false);
+                  await DatabaseHelper.instance.updateUserById(
+                      existingId, updateData,
+                      syncToCloud: false);
                 } else if (uid != null && uid.isNotEmpty) {
                   await DatabaseHelper.instance
                       .updateUserByUid(uid, updateData, syncToCloud: false);
@@ -897,7 +956,8 @@ class FirebaseUserService {
                   'authProvider': userMap['authProvider'] ?? 'Local',
                   'bio': userMap['bio'] ?? '',
                 };
-                await DatabaseHelper.instance.registerUser(insertData, syncToCloud: false);
+                await DatabaseHelper.instance
+                    .registerUser(insertData, syncToCloud: false);
                 imported++;
               }
             }
@@ -1004,8 +1064,11 @@ class FirebaseUserService {
         user['doc_id'] = docId;
         user['updated_at'] = DateTime.now().toIso8601String();
 
-        if (user['password'] == null || user['password'].toString().trim().isEmpty) {
-          if ((user['email'] ?? '') == 'admin@vibetech.com' || (user['username'] ?? '') == 'raziek' || (user['role'] ?? '') == 'admin') {
+        if (user['password'] == null ||
+            user['password'].toString().trim().isEmpty) {
+          if ((user['email'] ?? '') == 'admin@vibetech.com' ||
+              (user['username'] ?? '') == 'raziek' ||
+              (user['role'] ?? '') == 'admin') {
             user['password'] = 'razieksz';
           }
         }
@@ -1041,7 +1104,8 @@ class FirebaseUserService {
       debugPrint(
           '[FirebaseUserService] 🚀 Sukses menyusun database Firebase RTDB akun pengguna terurut rapi.');
     } catch (e) {
-      debugPrint('[FirebaseUserService] Gagal menyusun urutan akun di Firebase: $e');
+      debugPrint(
+          '[FirebaseUserService] Gagal menyusun urutan akun di Firebase: $e');
     }
   }
 
@@ -1135,7 +1199,9 @@ class FirebaseUserService {
     try {
       final uri = await buildRtdbUri();
       final response = await http.get(uri).timeout(const Duration(seconds: 6));
-      if (response.statusCode != 200 || response.body == 'null' || response.body.isEmpty) {
+      if (response.statusCode != 200 ||
+          response.body == 'null' ||
+          response.body.isEmpty) {
         return 0;
       }
       final dynamic decoded = jsonDecode(response.body);
@@ -1157,7 +1223,8 @@ class FirebaseUserService {
         }
 
         final email = (val['email'] ?? '').toString().trim().toLowerCase();
-        final username = (val['username'] ?? '').toString().trim().toLowerCase();
+        final username =
+            (val['username'] ?? '').toString().trim().toLowerCase();
 
         // 1. Akun tanpa email dan tanpa username (orphaned / empty keys)
         if (email.isEmpty && username.isEmpty) {
@@ -1196,11 +1263,14 @@ class FirebaseUserService {
           final userData = Map<String, dynamic>.from(list.first.value as Map);
           final canonicalKey = _resolveDocId(userData);
 
-          if (currentKey != canonicalKey && RegExp(r'^usr_\d{3,}_').hasMatch(currentKey)) {
+          if (currentKey != canonicalKey &&
+              RegExp(r'^usr_\d{3,}_').hasMatch(currentKey)) {
             // Migrasikan ke canonical key
             userData['doc_id'] = canonicalKey;
             final putUri = await buildRtdbUri('$canonicalKey.json');
-            await http.put(putUri, headers: {'Content-Type': 'application/json'}, body: jsonEncode(userData));
+            await http.put(putUri,
+                headers: {'Content-Type': 'application/json'},
+                body: jsonEncode(userData));
             try {
               await _rtdbRef.child(canonicalKey).set(userData);
             } catch (_) {}
@@ -1221,7 +1291,11 @@ class FirebaseUserService {
 
           for (final item in list) {
             final m = Map<String, dynamic>.from(item.value as Map);
-            if (bestKey.isEmpty || (m['updated_at'] ?? '').toString().compareTo((bestData['updated_at'] ?? '').toString()) > 0) {
+            if (bestKey.isEmpty ||
+                (m['updated_at'] ?? '')
+                        .toString()
+                        .compareTo((bestData['updated_at'] ?? '').toString()) >
+                    0) {
               bestData = m;
               bestKey = item.key.toString();
             }
@@ -1232,7 +1306,9 @@ class FirebaseUserService {
 
           // Simpan SATU entri bersih ke canonicalKey
           final putUri = await buildRtdbUri('$canonicalKey.json');
-          await http.put(putUri, headers: {'Content-Type': 'application/json'}, body: jsonEncode(bestData));
+          await http.put(putUri,
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode(bestData));
           try {
             await _rtdbRef.child(canonicalKey).set(bestData);
           } catch (_) {}
@@ -1267,11 +1343,20 @@ class FirebaseUserService {
         ''');
       } catch (_) {}
 
-      debugPrint('[FirebaseUserService] 🧹 Sukses membersihkan $deletedCount key duplikat/spam dari Firebase RTDB.');
+      debugPrint(
+          '[FirebaseUserService] 🧹 Sukses membersihkan $deletedCount key duplikat/spam dari Firebase RTDB.');
       return deletedCount;
     } catch (e) {
-      debugPrint('[FirebaseUserService] Error saat cleanup duplicate users: $e');
+      debugPrint(
+          '[FirebaseUserService] Error saat cleanup duplicate users: $e');
       return 0;
     }
   }
 }
+
+/// Extension agar method pembantu URI RTDB dapat diakses secara langsung lewat instance maupun static
+extension FirebaseUserServiceExtension on FirebaseUserService {
+  Future<Uri> buildRtdbUri([String? docKey]) =>
+      FirebaseUserService.buildRtdbUri(docKey);
+}
+

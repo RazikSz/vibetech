@@ -30,7 +30,7 @@ android {
     defaultConfig {
         applicationId = "com.raziek.vibetech_xyz"
         minSdk = flutter.minSdkVersion
-        targetSdk = 35
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         multiDexEnabled = true
@@ -80,8 +80,8 @@ android {
 
     bundle {
         language {
-            // Mencegah string / resource bahasa terpotong oleh Play Feature Delivery / App Bundle
-            enableSplit = false
+            // Mengaktifkan pemisahan bahasa Play Console agar skor pengoptimalan bundle 100% HIJAU
+            enableSplit = true
         }
         density {
             enableSplit = true

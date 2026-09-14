@@ -211,6 +211,11 @@ app.post('/api/charge', async (req, res) => {
       },
       customer_details: customer_details,
       enabled_payments: enabledPayments,
+      callbacks: {
+        finish: 'https://app.sandbox.midtrans.com/snap/v2/vtweb/close',
+        error: 'https://app.sandbox.midtrans.com/snap/v2/vtweb/close',
+        pending: 'https://app.sandbox.midtrans.com/snap/v2/vtweb/close',
+      },
     };
 
     let transaction;

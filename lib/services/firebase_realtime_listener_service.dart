@@ -109,7 +109,7 @@ class FirebaseRealtimeListenerService {
     try {
       // 1. Dapatkan auth token jika node membutuhkan izin
       String authParam = '';
-      if (nodeName != 'products' && nodeName != 'promo_discounts') {
+      if (nodeName != 'products') {
         final token = await FirebaseAuthTokenService.instance.getIdToken();
         if (token != null && token.isNotEmpty) {
           authParam = '?auth=$token';
@@ -135,7 +135,6 @@ class FirebaseRealtimeListenerService {
         debugPrint('[RealtimeListener] ⚠️ Gagal buka stream $nodeName (Status ${streamedResponse.statusCode})');
         client.close();
         if (streamedResponse.statusCode == 401) {
-          // Token mungkin kedaluwarsa atau invalid, bersihkan agar fetch baru di percobaan berikutnya
           FirebaseAuthTokenService.instance.clearToken();
         }
         _scheduleReconnect(nodeName);

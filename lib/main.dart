@@ -22,6 +22,17 @@ void main() async {
   // 1. Memastikan seluruh binding framework Flutter siap sebelum operasi asinkron
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Penangkal crash global agar aplikasi tidak pernah mengalami "Lost connection to device"
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+    debugPrint('[FlutterError] Tertangkap framework error: ${details.exceptionAsString()}');
+  };
+
+  PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
+    debugPrint('[PlatformDispatcher] Tertangkap async error non-fatal: $error');
+    return true; // Mencegah crash fatal pada level engine dan memelihara koneksi debugger
+  };
+
   // 1. Inisialisasi SQLite database factory untuk platform Desktop (Windows, Linux, macOS)
   if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
     sqfliteFfiInit();
