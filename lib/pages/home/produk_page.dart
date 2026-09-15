@@ -1148,8 +1148,12 @@ class _ProdukPageState extends State<ProdukPage> with TickerProviderStateMixin {
                   ),
                   onPressed: () async {
                     Navigator.pop(ctx);
-                    await DatabaseHelper.instance
-                        .deleteProductDiscount(product['id'] as int);
+                    final prodId = (product['id'] as num?)?.toInt() ??
+                        int.tryParse(product['id']?.toString() ?? '') ??
+                        0;
+                    if (prodId > 0) {
+                      await DatabaseHelper.instance.deleteProductDiscount(prodId);
+                    }
                     await _loadProducts();
                     if (!mounted) return;
                     setState(() {});

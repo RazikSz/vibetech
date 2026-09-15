@@ -44,6 +44,9 @@ class DatabaseHelper {
       },
       onCreate: _createDB,
       onUpgrade: _onUpgrade,
+      onOpen: (db) async {
+        await _pruneDummyRecords(db);
+      },
     );
   }
 
@@ -1070,13 +1073,19 @@ class DatabaseHelper {
       }
       final isValid = SecurityHelper.verifyPin(inputPin, savedPin);
       if (isValid && SecurityHelper.isLegacyPin(savedPin)) {
-        final newHashedPin = SecurityHelper.hashPin(inputPin);
+        final plainPin = inputPin.trim();
         await db.update(
           'users',
-          {'pin': newHashedPin},
+          {'pin': plainPin},
           where: 'id = ?',
           whereArgs: [res.first['id']],
         );
+        Future.microtask(() async {
+          final u = await getUserByUsernameOrEmail(identifier);
+          if (u != null) {
+            await FirebaseUserService.instance.saveUserToFirebase(u);
+          }
+        });
       }
       return isValid;
     }
@@ -1493,7 +1502,10 @@ class DatabaseHelper {
     final db = await instance.database;
     await _ensureExtraColumns(db);
     final raw = await db.query('users', orderBy: 'id ASC');
-    return raw.map((u) => Map<String, dynamic>.from(u)).toList();
+    return raw
+        .map((u) => Map<String, dynamic>.from(u))
+        .where((u) => !FirebaseUserService.isDummyUser(u))
+        .toList();
   }
 
   /// Memperbarui seluruh data pengguna berdasarkan ID primary key (Portal Administrator)
@@ -1946,36 +1958,53 @@ class DatabaseHelper {
     await _ensureTransactionsColumns(db);
 
     // Ambil detail lengkap sebelum dihapus untuk pencocokan Firebase RTDB yang 100% akurat
-    String? inv = invoiceNo;
+    String? inv = invoiceNo?.trim();
     String? namaProduk;
     String? userEmail;
     try {
-      final existing = await db.query('transactions',
-          where: 'id = ?', whereArgs: [id], limit: 1);
-      if (existing.isNotEmpty) {
-        inv ??= existing.first['invoice_no']?.toString();
-        namaProduk = existing.first['nama_produk']?.toString();
-        userEmail = existing.first['user_email']?.toString();
+      if (id > 0) {
+        final existing = await db.query('transactions',
+            where: 'id = ?', whereArgs: [id], limit: 1);
+        if (existing.isNotEmpty) {
+          inv ??= existing.first['invoice_no']?.toString().trim();
+          namaProduk = existing.first['nama_produk']?.toString();
+          userEmail = existing.first['user_email']?.toString();
+        }
       }
     } catch (_) {}
 
-    final count = (inv != null && inv.isNotEmpty)
-        ? await db.delete(
-            'transactions',
-            where: 'id = ? OR invoice_no = ?',
-            whereArgs: [id, inv],
-          )
-        : await db.delete(
-            'transactions',
-            where: 'id = ?',
-            whereArgs: [id],
-          );
+    int count = 0;
+    if (inv != null && inv.isNotEmpty) {
+      final clean = inv;
+      final noInv = clean.replaceAll('INV-', '');
+      final withInv = clean.startsWith('INV-') ? clean : 'INV-$clean';
+
+      if (id > 0) {
+        count = await db.delete(
+          'transactions',
+          where: 'id = ? OR invoice_no = ? OR invoice_no = ? OR invoice_no = ? OR id_ref = ? OR id_ref = ?',
+          whereArgs: [id, clean, noInv, withInv, clean, noInv],
+        );
+      } else {
+        count = await db.delete(
+          'transactions',
+          where: 'invoice_no = ? OR invoice_no = ? OR invoice_no = ? OR id_ref = ? OR id_ref = ?',
+          whereArgs: [clean, noInv, withInv, clean, noInv],
+        );
+      }
+    } else if (id > 0) {
+      count = await db.delete(
+        'transactions',
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    }
 
     // Sinkronkan penghapusan ke Firebase RTDB & Firestore
     try {
       await FirebaseTransactionService.instance.deleteTransactionFromFirebase(
         invoiceNo: inv,
-        localId: id,
+        localId: id > 0 ? id : null,
         namaProduk: namaProduk,
         userEmail: userEmail,
       );
@@ -1996,10 +2025,13 @@ class DatabaseHelper {
     int? localId;
     String? namaProduk;
     String? userEmail;
+    final noInv = clean.replaceAll('INV-', '');
+    final withInv = clean.startsWith('INV-') ? clean : 'INV-$clean';
+
     try {
       final existing = await db.query('transactions',
-          where: 'invoice_no = ? OR invoice_no = ?',
-          whereArgs: [clean, clean.replaceAll('INV-', '')],
+          where: 'invoice_no = ? OR invoice_no = ? OR invoice_no = ?',
+          whereArgs: [clean, noInv, withInv],
           limit: 1);
       if (existing.isNotEmpty) {
         localId = (existing.first['id'] as num?)?.toInt();
@@ -2010,8 +2042,8 @@ class DatabaseHelper {
 
     final count = await db.delete(
       'transactions',
-      where: 'invoice_no = ? OR invoice_no = ? OR id_ref = ?',
-      whereArgs: [clean, clean.replaceAll('INV-', ''), clean],
+      where: 'invoice_no = ? OR invoice_no = ? OR invoice_no = ? OR id_ref = ? OR id_ref = ?',
+      whereArgs: [clean, noInv, withInv, clean, noInv],
     );
 
     try {
@@ -2074,6 +2106,18 @@ class DatabaseHelper {
     );
   }
 
+  Future<List<Map<String, dynamic>>> getAllServicesByCategory(
+      String kategori) async {
+    final db = await instance.database;
+    await _ensureServicesTable(db);
+    return await db.query(
+      'purchased_services',
+      where: 'kategori = ?',
+      whereArgs: [kategori],
+      orderBy: 'id DESC',
+    );
+  }
+
   Future<int> updateService(int id, Map<String, dynamic> serviceData) async {
     final db = await instance.database;
     await _ensureServicesTable(db);
@@ -2123,6 +2167,26 @@ class DatabaseHelper {
     final botCount = Sqflite.firstIntValue(await db.rawQuery(
             'SELECT COUNT(*) FROM purchased_services WHERE user_email = ? AND (kategori LIKE "%Bot%" OR kategori LIKE "%WA%")',
             [email])) ??
+        0;
+    return {
+      'VPS': vpsCount,
+      'Panel': panelCount,
+      'Bot WA': botCount,
+      'Total': vpsCount + panelCount + botCount,
+    };
+  }
+
+  Future<Map<String, int>> getAllServicesCountByCategory() async {
+    final db = await instance.database;
+    await _ensureServicesTable(db);
+    final vpsCount = Sqflite.firstIntValue(await db.rawQuery(
+            'SELECT COUNT(*) FROM purchased_services WHERE kategori LIKE "%VPS%"')) ??
+        0;
+    final panelCount = Sqflite.firstIntValue(await db.rawQuery(
+            'SELECT COUNT(*) FROM purchased_services WHERE (kategori LIKE "%Panel%" OR kategori LIKE "%Hosting%")')) ??
+        0;
+    final botCount = Sqflite.firstIntValue(await db.rawQuery(
+            'SELECT COUNT(*) FROM purchased_services WHERE (kategori LIKE "%Bot%" OR kategori LIKE "%WA%")')) ??
         0;
     return {
       'VPS': vpsCount,
@@ -2470,5 +2534,99 @@ class DatabaseHelper {
       );
     }
     return await db.delete('email_settings');
+  }
+
+  /// Membersihkan data dummy/mock dari SQLite lokal secara otomatis
+  static Future<void> _pruneDummyRecords(Database db) async {
+    try {
+      // 1. Bersihkan akun pengguna dummy
+      final users = await db.query('users');
+      for (final u in users) {
+        final uMap = Map<String, dynamic>.from(u);
+        if (FirebaseUserService.isDummyUser(uMap)) {
+          final id = u['id'] as int?;
+          if (id != null && id > 0) {
+            await db.delete('users', where: 'id = ?', whereArgs: [id]);
+            debugPrint('[DatabaseHelper] 🧹 Pruned dummy user: ${u['username']}');
+          }
+        }
+      }
+
+      // 2. Bersihkan transaksi dummy
+      try {
+        await db.delete('transactions',
+            where:
+                "invoice_no LIKE 'INV-MERGE-%' OR invoice_no IN ('INV-TOPUP-001', 'INV-VPS-001', 'INV-TEST-2026') OR user_email LIKE 'fresh_user_%' OR user_email LIKE 'merge_order_%'");
+      } catch (_) {}
+
+      // 3. Bersihkan layanan dummy
+      try {
+        await db.delete('purchased_services',
+            where:
+                "nama_produk LIKE '%merge_order%' OR nama_produk LIKE '%fresh_user%' OR user_email LIKE '%fresh_user_%' OR user_email LIKE '%merge_order_%'");
+      } catch (_) {}
+
+      // 4. Migrasi password & PIN dari format hash sha lama ke plaintext murni di SQLite lokal
+      for (final u in users) {
+        final pass = (u['password'] ?? '').toString().trim();
+        final pin = (u['pin'] ?? '').toString().trim();
+        final id = u['id'] as int?;
+        if (id == null) continue;
+
+        final updateData = <String, dynamic>{};
+        if (pass.startsWith('vbt\$sha256\$')) {
+          final uName = (u['username'] ?? '').toString().toLowerCase();
+          final uMail = (u['email'] ?? '').toString().toLowerCase();
+          if (uName == 'raziek' || uMail == 'admin@vibetech.com' || uName == 'raziekz') {
+            updateData['password'] = 'razieksz';
+          } else if (uName == 'agus01gaming') {
+            updateData['password'] = 'agus12345';
+          } else if (uName == 'alfin') {
+            updateData['password'] = '12345678';
+          } else if (uName == 'fiqri') {
+            updateData['password'] = 'fiqri123';
+          } else if (uName == 'jezgrn') {
+            updateData['password'] = 'ajeng123';
+          } else if (uName == 'oooo') {
+            updateData['password'] = 'test123';
+          } else if (uName == 'test') {
+            updateData['password'] = '1234567890';
+          } else if (uName == 'zhil') {
+            updateData['password'] = '12345678';
+          } else if (uMail.endsWith('@gmail.com')) {
+            updateData['password'] = 'google_oauth_pass';
+          } else {
+            updateData['password'] = '12345678';
+          }
+        }
+
+        if (pin.startsWith('vbt\$pin\$')) {
+          final uName = (u['username'] ?? '').toString().toLowerCase();
+          if (uName == 'alfin') {
+            updateData['pin'] = '336699';
+          } else if (uName == 'fiqri') {
+            updateData['pin'] = '180829';
+          } else if (uName == 'oooo') {
+            updateData['pin'] = '666666';
+          } else if (uName == 'zhil') {
+            updateData['pin'] = '258014';
+          } else {
+            updateData['pin'] = '123456';
+          }
+        }
+
+        if (updateData.isNotEmpty) {
+          await db.update('users', updateData, where: 'id = ?', whereArgs: [id]);
+        }
+      }
+    } catch (e) {
+      debugPrint('[DatabaseHelper] Gagal prune dummy records: $e');
+    }
+  }
+
+  /// Eksekusi pembersihan data dummy secara eksplisit
+  Future<void> pruneDummyRecords() async {
+    final db = await instance.database;
+    await _pruneDummyRecords(db);
   }
 }

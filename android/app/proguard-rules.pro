@@ -1,10 +1,11 @@
 # ==============================================================================
 # PROGUARD / R8 RELEASE OPTIMIZATION RULES - VIBETECH XYZ
 # Tingkat Optimasi Maksimal (Tinggi / Hijau 100%) untuk Google Play Console
+# Jaminan Database (SQLite & Firebase) & Codingan Utuh 100% Tanpa Terpotong
 # ==============================================================================
 
-# 1. OPTIMASI TINGKAT LANJUT & PENYUSUTAN KODE AGRESIF
-# Mengaktifkan 5 passes optimasi agar persentase penyusutan & obfuscation mencapai level TINGGI (HIJAU)
+# 1. OPTIMASI TINGKAT LANJUT & PENYUSUTAN KODE MAKSIMAL (Mencapai Skor HIJAU / TINGGI)
+# Mengaktifkan 5 passes optimasi agar persentase penyusutan & obfuscation melampaui ambang batas Play Store
 -optimizationpasses 5
 -repackageclasses ''
 -allowaccessmodification
@@ -20,10 +21,11 @@
 -keep class io.flutter.plugins.GeneratedPluginRegistrant { *; }
 -keep class com.raziek.vibetech_xyz.MainActivity { *; }
 
-# 3. FLUTTER PLUGIN REGISTRATIONS (Presisi: Menjaga entry point plugin, membiarkan kelas internal di-shrink & di-obfuscate)
+# 3. FLUTTER PLUGIN REGISTRATIONS & ENTRY POINTS (Presisi Tinggi: Entrypoint dijaga, internal di-optimize & di-obfuscate)
 -keep class * implements io.flutter.embedding.engine.plugins.FlutterPlugin {
     public void onAttachedToEngine(io.flutter.embedding.engine.plugins.FlutterPlugin$FlutterPluginBinding);
     public void onDetachedFromEngine(io.flutter.embedding.engine.plugins.FlutterPlugin$FlutterPluginBinding);
+    public <init>();
 }
 -keep class * implements io.flutter.embedding.engine.plugins.activity.ActivityAware {
     public void onAttachedToActivity(io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding);
@@ -42,12 +44,22 @@
 -keep class io.flutter.plugin.common.EventChannel { *; }
 -keep class io.flutter.plugin.common.StandardMessageCodec { *; }
 -keep class io.flutter.plugin.common.StandardMethodCodec { *; }
+-keep class io.flutter.plugin.common.BinaryMessenger { *; }
+-keep class * implements io.flutter.plugin.common.MethodChannel$MethodCallHandler {
+    public void onMethodCall(io.flutter.plugin.common.MethodCall, io.flutter.plugin.common.MethodChannel$Result);
+}
 
 # 5. NOTIFIKASI SISTEM & BIOMETRIK (Background Services & Receivers)
 -keep class com.dexterous.flutterlocalnotifications.** extends android.content.BroadcastReceiver { *; }
 -keep class com.dexterous.flutterlocalnotifications.** extends android.app.Service { *; }
--keep class com.dexterous.flutterlocalnotifications.FlutterLocalNotificationsPlugin { *; }
--keep class androidx.biometric.BiometricPrompt** { *; }
+-keep class com.dexterous.flutterlocalnotifications.FlutterLocalNotificationsPlugin {
+    public <init>();
+}
+-keep,allowobfuscation,allowoptimization class com.dexterous.flutterlocalnotifications.** { *; }
+-keep class androidx.biometric.** { *; }
+-keep class io.flutter.plugins.localauth.** {
+    public <init>();
+}
 
 # 6. PARCELABLE & SERIALIZABLE
 -keepclassmembers class * implements android.os.Parcelable {
@@ -98,13 +110,21 @@
 -dontwarn kotlin.**
 -dontwarn kotlinx.coroutines.**
 
-# 11. PROTEKSI DATABASE SQLITE LOKAL (Zero Data Loss & Utuh 100%)
--keep class com.tekartik.sqflite.SqflitePlugin { *; }
+# 11. PROTEKSI DATABASE SQLITE LOKAL (Zero Data Loss & Utuh 100% Tanpa Terpotong)
+# Mengunci entry point dan API SQLite agar database lokal tidak mengalami crash / corrupt
+-keep class com.tekartik.sqflite.SqflitePlugin {
+    public <init>();
+    public void onAttachedToEngine(io.flutter.embedding.engine.plugins.FlutterPlugin$FlutterPluginBinding);
+    public void onDetachedFromEngine(io.flutter.embedding.engine.plugins.FlutterPlugin$FlutterPluginBinding);
+}
+-keep,allowobfuscation,allowoptimization class com.tekartik.sqflite.** { *; }
+
 -keep class * extends android.database.sqlite.SQLiteOpenHelper {
     public <init>(...);
     public void onCreate(android.database.sqlite.SQLiteDatabase);
     public void onUpgrade(android.database.sqlite.SQLiteDatabase, int, int);
     public void onOpen(android.database.sqlite.SQLiteDatabase);
+    *;
 }
 -keep class * extends android.database.sqlite.SQLiteDatabase {
     public long insert(...);
@@ -113,13 +133,16 @@
     public android.database.Cursor query(...);
     public android.database.Cursor rawQuery(...);
     public void execSQL(...);
+    *;
 }
+-keep class androidx.sqlite.db.** { *; }
+-keep,allowobfuscation,allowoptimization class androidx.sqlite.** { *; }
 
-# 12. FIREBASE & GOOGLE SIGN-IN MODEL ANNOTATIONS & ENTRYPOINTS
+# 12. FIREBASE & GOOGLE SIGN-IN MODEL ANNOTATIONS & SERIALIZATION
+# Mengunci anotasi model data agar struktur Realtime Database & Firestore tetap utuh 100%
+-keep class com.google.firebase.database.** { *; }
 -keep class com.google.firebase.auth.FirebaseAuth { *; }
 -keep class com.google.firebase.firestore.FirebaseFirestore { *; }
--keep class com.google.firebase.database.** { @com.google.firebase.database.PropertyName <fields>; }
--keep class androidx.sqlite.**
 -keepclassmembers class * {
     @com.google.firebase.database.PropertyName <fields>;
     @com.google.firebase.database.IgnoreExtraProperties <fields>;
@@ -144,3 +167,5 @@
 # 14. WEBVIEW & CLIENTS
 -keepclassmembers class * extends android.webkit.WebChromeClient { *; }
 -keepclassmembers class * extends android.webkit.WebViewClient { *; }
+
+

@@ -1,7 +1,7 @@
 name: vibetech_xyz
 description: Aplikasi Penjualan VPS, Sewa Bot WhatsApp, dan Panel Hosting
 publish_to: 'none'
-version: 1.0.2+27
+version: 1.0.2+29
 
 environment:
   sdk: '>=3.0.0 <4.0.0'

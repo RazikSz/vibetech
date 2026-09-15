@@ -8,6 +8,7 @@ import 'package:vibetech_xyz/database/db_helper.dart';
 import 'package:vibetech_xyz/services/balance_service.dart';
 import 'package:vibetech_xyz/services/firebase_auth_token_service.dart';
 import 'package:vibetech_xyz/services/firebase_product_service.dart';
+import 'package:vibetech_xyz/services/firebase_transaction_service.dart';
 import 'package:vibetech_xyz/services/firebase_user_service.dart';
 import 'package:vibetech_xyz/utils/security_helper.dart';
 
@@ -649,17 +650,19 @@ class FirebaseRealtimeListenerService {
     for (final u in allUsers) {
       final uName = (u['username'] ?? '').toString().toLowerCase();
       final uMail = (u['email'] ?? '').toString().toLowerCase();
+      final uUid = (u['uid'] ?? '').toString().toLowerCase();
       final uRole = (u['role'] ?? 'user').toString().toLowerCase();
       if (uRole == 'admin' || uRole == 'administrator') continue;
 
-      final isMatch = cleanKey == 'usr_$uName' ||
+      final isMatch = cleanKey == uUid ||
+          cleanKey == 'usr_$uName' ||
           cleanKey.endsWith('_$uName') ||
           (uMail.isNotEmpty && (cleanKey == 'usr_${uMail.split('@').first}' || cleanKey.endsWith('_${uMail.split('@').first}')));
 
       if (isMatch) {
         final id = u['id'] as int;
         await db.delete('users', where: 'id = ?', whereArgs: [id]);
-        debugPrint('[RealtimeListener] 🗑️ User "$uName" dihapus dari SQLite karena dihapus di Firebase.');
+        debugPrint('[RealtimeListener] 🗑️ User "$uName" ($uUid) dihapus dari SQLite karena dihapus di Firebase.');
         break;
       }
     }
@@ -858,7 +861,14 @@ class FirebaseRealtimeListenerService {
           'spesifikasi': 'Layanan Cloud Otomatis VibeTech',
         };
 
-        await db.insert('purchased_services', srvRow);
+        final newId = await db.insert('purchased_services', srvRow);
+        try {
+          final syncData = Map<String, dynamic>.from(srvRow);
+          syncData['id'] = newId;
+          FirebaseTransactionService.instance
+              .saveServiceToFirebase(syncData)
+              .catchError((_) => null);
+        } catch (_) {}
         servicesUpdateCount.value++;
         debugPrint('[RealtimeListener] 🚀 Layanan "$namaProduk" otomatis dibuat untuk $email karena transaksi Selesai.');
       }

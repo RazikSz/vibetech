@@ -100,9 +100,10 @@ class _DataVpsPageState extends State<DataVpsPage> {
   Future<void> _loadVpsData() async {
     if (!mounted) return;
     try {
-      final raw = await DatabaseHelper.instance
-          .getServicesByCategory(_activeEmail, 'VPS')
-          .timeout(const Duration(seconds: 4), onTimeout: () => []);
+      final raw = _isAdmin
+          ? await DatabaseHelper.instance.getAllServicesByCategory('VPS')
+          : await DatabaseHelper.instance
+              .getServicesByCategory(_activeEmail, 'VPS');
       if (mounted) {
         setState(() {
           _vpsList = raw.map((e) => PurchasedService.fromMap(e)).toList();
@@ -241,7 +242,7 @@ class _DataVpsPageState extends State<DataVpsPage> {
     );
   }
 
-  void _showDeleteConfirmDialog(int id, String name) {
+  void _showDeleteConfirmDialog(PurchasedService vps) {
     if (!_isAdmin) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -267,8 +268,8 @@ class _DataVpsPageState extends State<DataVpsPage> {
         ),
         content: Text(
           LanguageService.text(
-              'Apakah Anda yakin ingin menghapus $name dari daftar layanan?',
-              'Are you sure you want to delete $name from your services?'),
+              'Apakah Anda yakin ingin menghapus ${vps.namaProduk} dari daftar layanan?',
+              'Are you sure you want to delete ${vps.namaProduk} from your services?'),
           style: GoogleFonts.poppins(color: _textSecondary),
         ),
         actions: [
@@ -284,15 +285,36 @@ class _DataVpsPageState extends State<DataVpsPage> {
                   borderRadius: BorderRadius.circular(12)),
             ),
             onPressed: () async {
-              await DatabaseHelper.instance.deleteService(id);
-              await FirebaseTransactionService.instance.deleteServiceFromFirebase(
-                id,
-                namaProduk: name,
-                userEmail: _activeEmail,
-              );
-              if (!ctx.mounted) return;
               Navigator.pop(ctx);
-              _loadVpsData();
+              setState(() {
+                _vpsList.removeWhere((s) => s.id == vps.id);
+              });
+              HapticFeedback.mediumImpact();
+              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    LanguageService.text(
+                      'Data VPS "${vps.namaProduk}" berhasil dihapus!',
+                      'VPS "${vps.namaProduk}" deleted successfully!',
+                    ),
+                    style: GoogleFonts.poppins(color: Colors.white),
+                  ),
+                  backgroundColor: AppColors.error,
+                  behavior: SnackBarBehavior.floating,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+
+              final docId = FirebaseTransactionService.instance.resolveServiceDocId(vps.toMap());
+              await DatabaseHelper.instance.deleteService(vps.id ?? 0);
+              await FirebaseTransactionService.instance.deleteServiceFromFirebase(
+                vps.id ?? 0,
+                docId: docId,
+                namaProduk: vps.namaProduk,
+                userEmail: vps.userEmail,
+              );
             },
             child: Text(LanguageService.tr('hapus'),
                 style: GoogleFonts.poppins(
@@ -341,6 +363,32 @@ class _DataVpsPageState extends State<DataVpsPage> {
               color: _textPrimary, fontWeight: FontWeight.bold, fontSize: 18),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.sync_rounded, color: AppColors.accent),
+            onPressed: () async {
+              await FirebaseTransactionService.instance
+                  .syncServicesFromFirebase(userEmail: _isAdmin ? null : _activeEmail);
+              await _loadVpsData();
+              if (!context.mounted) return;
+              HapticFeedback.lightImpact();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    LanguageService.text(
+                      'Data VPS berhasil disinkronkan dari Firebase Realtime Database!',
+                      'VPS data synced from Firebase Realtime Database!',
+                    ),
+                    style: GoogleFonts.poppins(color: Colors.white),
+                  ),
+                  backgroundColor: AppColors.emerald,
+                  behavior: SnackBarBehavior.floating,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            },
+            tooltip: LanguageService.text('Sinkronkan dari Firebase', 'Sync from Firebase'),
+          ),
           if (_isAdmin)
             IconButton(
               icon: const Icon(Icons.add_circle_outline_rounded,
@@ -735,8 +783,7 @@ class _DataVpsPageState extends State<DataVpsPage> {
                           IconButton(
                             icon: const Icon(Icons.delete_outline_rounded,
                                 color: AppColors.error, size: 20),
-                            onPressed: () => _showDeleteConfirmDialog(
-                                vps.id ?? 0, vps.namaProduk),
+                            onPressed: () => _showDeleteConfirmDialog(vps),
                             tooltip: LanguageService.tr('hapus'),
                           ),
                         ],
