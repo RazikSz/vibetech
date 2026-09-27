@@ -52,7 +52,17 @@ class UserModel {
   final int is2FA;
 
   /// Preferensi bahasa aplikasi (misal: 'Indonesia', 'English')
+  /// Preferensi bahasa aplikasi (misal: 'Indonesia', 'English')
   final String language;
+
+  /// Kode referral dari pengundang (upline)
+  final String? referredBy;
+
+  /// Tingkatan kemitraan reseller: 'Standard', 'Silver', 'Gold', 'Platinum'
+  final String resellerTier;
+
+  /// Total akumulasi belanja sukses pengguna
+  final double totalSpending;
 
   /// Waktu terakhir data akun diperbarui di cloud
   final String? updatedAt;
@@ -67,6 +77,9 @@ class UserModel {
     required this.password,
     this.pin = '123456',
     this.referralCode,
+    this.referredBy,
+    this.resellerTier = 'Standard',
+    this.totalSpending = 0.0,
     this.role = 'user',
     required this.createdAt,
     this.saldo = 0.0,
@@ -89,6 +102,9 @@ class UserModel {
       password: map['password']?.toString() ?? '',
       pin: map['pin']?.toString() ?? '123456',
       referralCode: map['referralCode']?.toString(),
+      referredBy: map['referredBy']?.toString(),
+      resellerTier: map['resellerTier']?.toString() ?? 'Standard',
+      totalSpending: (map['totalSpending'] as num?)?.toDouble() ?? 0.0,
       role: map['role']?.toString() ?? 'user',
       createdAt: map['createdAt']?.toString() ?? DateTime.now().toIso8601String(),
       saldo: (map['saldo'] as num?)?.toDouble() ?? 0.0,
@@ -112,6 +128,9 @@ class UserModel {
       password: doc['password']?.toString() ?? '',
       pin: doc['pin']?.toString() ?? '123456',
       referralCode: doc['referralCode']?.toString() ?? doc['referral_code']?.toString(),
+      referredBy: doc['referredBy']?.toString() ?? doc['referred_by']?.toString(),
+      resellerTier: doc['resellerTier']?.toString() ?? doc['reseller_tier']?.toString() ?? 'Standard',
+      totalSpending: (doc['totalSpending'] as num?)?.toDouble() ?? (doc['total_spending'] as num?)?.toDouble() ?? 0.0,
       role: doc['role']?.toString() ?? 'user',
       createdAt: doc['createdAt']?.toString() ?? doc['created_at']?.toString() ?? DateTime.now().toIso8601String(),
       saldo: (doc['saldo'] as num?)?.toDouble() ?? 0.0,
@@ -135,6 +154,9 @@ class UserModel {
       'password': password,
       'pin': pin,
       if (referralCode != null) 'referralCode': referralCode,
+      if (referredBy != null) 'referredBy': referredBy,
+      'resellerTier': resellerTier,
+      'totalSpending': totalSpending,
       'role': role,
       'createdAt': createdAt,
       'saldo': saldo,
@@ -157,6 +179,9 @@ class UserModel {
       'password': password,
       'pin': pin,
       'referralCode': referralCode ?? '',
+      'referredBy': referredBy ?? '',
+      'resellerTier': resellerTier,
+      'totalSpending': totalSpending,
       'role': role,
       'createdAt': createdAt,
       'saldo': saldo,
@@ -189,6 +214,9 @@ class UserModel {
     String? password,
     String? pin,
     String? referralCode,
+    String? referredBy,
+    String? resellerTier,
+    double? totalSpending,
     String? role,
     String? createdAt,
     double? saldo,
@@ -208,6 +236,9 @@ class UserModel {
       password: password ?? this.password,
       pin: pin ?? this.pin,
       referralCode: referralCode ?? this.referralCode,
+      referredBy: referredBy ?? this.referredBy,
+      resellerTier: resellerTier ?? this.resellerTier,
+      totalSpending: totalSpending ?? this.totalSpending,
       role: role ?? this.role,
       createdAt: createdAt ?? this.createdAt,
       saldo: saldo ?? this.saldo,

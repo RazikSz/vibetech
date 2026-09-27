@@ -15,6 +15,8 @@ import '../../services/language_service.dart';
 import '../../services/midtrans_direct_payment_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/qris_service.dart';
+import '../../services/server_provisioning_service.dart';
+import '../../services/referral_service.dart';
 import '../common/data_layanan_page.dart';
 import 'billing_page.dart';
 
@@ -84,6 +86,10 @@ class _PembayaranPageState extends State<PembayaranPage> {
   int? _currentTransactionDbId;
   QrisDynamicResult? _currentQrisResult;
   MidtransDirectPaymentResult? _lastDirectPaymentResult;
+
+  // Set ID & Invoice transaksi yang telah dihapus untuk optimistic update instan di UI
+  final Set<String> _deletedTxKeys = {};
+  int _historyReloadKey = 0;
 
   final List<Map<String, dynamic>> _paymentMethods = [
     {
@@ -430,7 +436,6 @@ class _PembayaranPageState extends State<PembayaranPage> {
       }
 
       // --- OTOMATISASI GENERATE DATA LAYANAN (VPS / PANEL HOSTING / BOT WA) ---
-      final now = DateTime.now();
       for (var item in widget.items) {
         final String name =
             (item['name'] ?? item['title'] ?? 'Layanan VibeTech').toString();
@@ -440,70 +445,39 @@ class _PembayaranPageState extends State<PembayaranPage> {
             item['specs']?.toString() ?? 'Standard Specification';
         final double price = (item['price'] as num?)?.toDouble() ?? 0.0;
         final int qty = (item['quantity'] as num?)?.toInt() ?? 1;
-        final String expDate =
-            now.add(Duration(days: 30 * (qty > 0 ? qty : 1))).toIso8601String();
-        final String todayStr = now.toIso8601String();
-
-        String category = 'VPS';
-        String? ipAddress;
-        String? port;
-        String? username;
-        String? password;
-        String? serverUrl;
-        String? sessionId;
-        String? extraData;
-
+        final String category;
         if (nameLower.contains('vps') || type.contains('vps')) {
           category = 'VPS';
-          final octet3 = 100 + (now.millisecond % 150);
-          final octet4 = 10 + (now.microsecond % 240);
-          ipAddress = '103.187.$octet3.$octet4';
-          port = '22';
-          username = 'root';
-          password =
-              'VibeVPS#${now.millisecondsSinceEpoch.toString().substring(7)}!';
-          extraData = 'OS: Ubuntu 22.04 LTS (SG-01 Node)';
         } else if (nameLower.contains('panel') ||
             nameLower.contains('hosting') ||
             type.contains('panel')) {
           category = 'Panel Hosting';
-          port = '8080';
-          serverUrl = 'https://panel.vibetech.xyz:8080';
-          username = 'vibe_${now.millisecondsSinceEpoch.toString().substring(8)}';
-          password =
-              'Panel@${now.millisecondsSinceEpoch.toString().substring(7)}';
-          extraData = 'Node: Singapore High-Speed (Pterodactyl)';
         } else {
           category = 'Bot WhatsApp';
-          sessionId =
-              'WA-SESSION-${now.millisecondsSinceEpoch.toString().substring(6)}';
-          final pairCode = 1000 + (now.millisecond % 9000);
-          extraData = 'PAIR-CODE: VBWA-$pairCode';
-          username = _currentUserEmail;
         }
 
-        await DatabaseHelper.instance.createService({
-          'user_email': _currentUserEmail,
-          'nama_produk':
-              '$name #${now.millisecondsSinceEpoch.toString().substring(8)}',
-          'kategori': category,
-          'harga': price * qty,
-          'tanggal_beli': todayStr,
-          'tanggal_kadaluarsa': expDate,
-          'status': 'Aktif',
-          'ip_address': ipAddress,
-          'port': port,
-          'username': username,
-          'password': password,
-          'server_url': serverUrl,
-          'session_id': sessionId,
-          'spesifikasi': specs,
-          'extra_data': extraData,
-        });
+        // Eksekusi auto-provisioning instan & sinkronisasi ganda (SQLite + Firebase RTDB)
+        await ServerProvisioningService.instance.autoProvisionService(
+          userEmail: _currentUserEmail,
+          productName: name,
+          category: category,
+          price: price * qty,
+          durationMonths: qty > 0 ? qty : 1,
+          invoiceNo: _generatedInvoiceNo,
+          customerName: _currentUserEmail.split('@').first,
+          customSpecs: specs,
+        );
       }
 
       // Sinkronisasi saldo aktif dari SQLite Database
       await BalanceService.loadUserBalance(_currentUserEmail);
+
+      // Eksekusi komisi referral otomatis & akumulasi Reseller Tier
+      await ReferralService.instance.processOrderSettlement(
+        buyerEmail: _currentUserEmail,
+        totalAmount: widget.totalAmount.toDouble(),
+        invoiceNo: _generatedInvoiceNo,
+      );
 
       // --- OTOMATISASI PENGIRIMAN NOTIFIKASI EMAIL & PUSH NOTIFIKASI PEMBELIAN ---
       if (!mounted) return;
@@ -1464,6 +1438,161 @@ class _PembayaranPageState extends State<PembayaranPage> {
     );
   }
 
+  void _showDeleteTransactionDialog(Map<String, dynamic> item) {
+    final int orderId = int.tryParse(item['id']?.toString() ?? '') ??
+        ((item['id'] as num?)?.toInt() ?? 0);
+    final String invNo =
+        (item['invoice_no'] ?? item['id_ref'] ?? '').toString().trim();
+    final String prodName =
+        item['nama_produk']?.toString() ?? 'Layanan VibeTech';
+    final String userEmail =
+        item['user_email']?.toString() ?? _currentUserEmail;
+    final isDark = widget.isDarkMode;
+    final cardBgColor = isDark ? const Color(0xFF141A29) : Colors.white;
+    final textPrimary = isDark ? Colors.white : const Color(0xFF1E293B);
+    final textSecondary =
+        isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: cardBgColor,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: Colors.red.withValues(alpha: 0.3)),
+        ),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.red.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.delete_outline_rounded,
+                  color: Colors.red, size: 22),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                LanguageService.text('Hapus Transaksi?', 'Delete Transaction?'),
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                  color: textPrimary,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          LanguageService.text(
+            'Apakah Anda yakin ingin menghapus transaksi "${invNo.isNotEmpty ? invNo : (orderId > 0 ? "#$orderId" : prodName)}" ($prodName) secara permanen dari database lokal dan Firebase cloud?',
+            'Are you sure you want to permanently delete transaction "${invNo.isNotEmpty ? invNo : (orderId > 0 ? "#$orderId" : prodName)}" ($prodName) from local database and Firebase cloud?',
+          ),
+          style: TextStyle(color: textSecondary, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: Text(
+              LanguageService.text('Batal', 'Cancel'),
+              style: TextStyle(color: textSecondary),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            onPressed: () async {
+              HapticFeedback.heavyImpact();
+              Navigator.of(dialogCtx).pop();
+
+              // 1. Optimistic UI update: langsung hilangkan item dari tampilan
+              setState(() {
+                if (orderId > 0) {
+                  _deletedTxKeys.add(orderId.toString());
+                  _deletedTxKeys.add('loc_$orderId');
+                  _deletedTxKeys.add('TX_$orderId');
+                }
+                if (invNo.isNotEmpty) {
+                  _deletedTxKeys.add(invNo);
+                  _deletedTxKeys.add(invNo.replaceAll('INV-', ''));
+                  _deletedTxKeys.add('INV-$invNo');
+                }
+                _historyReloadKey++;
+              });
+
+              // 2. Notifikasi snackbar bahwa transaksi sedang/berhasil dihapus
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      LanguageService.text(
+                        'Transaksi ${invNo.isNotEmpty ? invNo : (orderId > 0 ? "#$orderId" : prodName)} berhasil dihapus permanen.',
+                        'Transaction ${invNo.isNotEmpty ? invNo : (orderId > 0 ? "#$orderId" : prodName)} deleted permanently.',
+                      ),
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    backgroundColor: Colors.red.shade700,
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                );
+              }
+
+              // 3. Eksekusi penghapusan di SQLite
+              try {
+                if (orderId > 0) {
+                  await DatabaseHelper.instance
+                      .deleteTransaction(orderId, invoiceNo: invNo);
+                }
+                if (invNo.isNotEmpty) {
+                  await DatabaseHelper.instance
+                      .deleteTransactionByInvoice(invNo);
+                }
+              } catch (e) {
+                debugPrint(
+                    '[PembayaranPage] Error deleting transaction from SQLite: $e');
+              }
+
+              // 4. Sinkronkan penghapusan ke Firebase Cloud RTDB & Firestore
+              try {
+                await FirebaseTransactionService.instance
+                    .deleteTransactionFromFirebase(
+                  localId: orderId > 0 ? orderId : null,
+                  invoiceNo: invNo.isNotEmpty ? invNo : null,
+                  namaProduk: prodName,
+                  userEmail: userEmail,
+                );
+              } catch (e) {
+                debugPrint(
+                    '[PembayaranPage] Firebase delete transaction error: $e');
+              }
+
+              // 5. Muat ulang data terbaru
+              if (mounted) {
+                setState(() {
+                  _historyReloadKey++;
+                });
+              }
+            },
+            child: Text(
+              LanguageService.text('Hapus', 'Delete'),
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = widget.isDarkMode;
@@ -1954,6 +2083,7 @@ class _PembayaranPageState extends State<PembayaranPage> {
                     color: textPrimary)),
             const SizedBox(height: 12),
             FutureBuilder<List<Map<String, dynamic>>>(
+              key: ValueKey(_historyReloadKey),
               future: DatabaseHelper.instance
                   .getTransactionsByUser(_currentUserEmail),
               builder: (context, snapshot) {
@@ -1961,7 +2091,23 @@ class _PembayaranPageState extends State<PembayaranPage> {
                     !snapshot.hasData) {
                   return const SizedBox.shrink();
                 }
-                final history = snapshot.data ?? [];
+                final rawHistory = snapshot.data ?? [];
+                final history = rawHistory.where((item) {
+                  final idStr = item['id']?.toString() ?? '';
+                  final inv = (item['invoice_no'] ?? item['id_ref'] ?? '')
+                      .toString()
+                      .trim();
+                  if (_deletedTxKeys.contains(idStr) ||
+                      _deletedTxKeys.contains('loc_$idStr') ||
+                      _deletedTxKeys.contains('TX_$idStr') ||
+                      _deletedTxKeys.contains(inv) ||
+                      _deletedTxKeys.contains(inv.replaceAll('INV-', '')) ||
+                      _deletedTxKeys.contains('INV-$inv')) {
+                    return false;
+                  }
+                  return true;
+                }).toList();
+
                 if (history.isEmpty) {
                   return Text(
                       LanguageService.text('Belum ada riwayat transaksi.',
@@ -1996,47 +2142,62 @@ class _PembayaranPageState extends State<PembayaranPage> {
                                 icon: const Icon(Icons.check,
                                     color: Colors.green),
                                 tooltip: LanguageService.text(
-                                    'Tandai Selesai (Admin)', 'Mark as Done (Admin)'),
+                                    'Tandai Selesai (Admin)',
+                                    'Mark as Done (Admin)'),
                                 onPressed: () async {
-                                  final orderId =
-                                      (item['id'] as num?)?.toInt() ?? 0;
+                                  final orderId = int.tryParse(
+                                          item['id']?.toString() ?? '') ??
+                                      ((item['id'] as num?)?.toInt() ?? 0);
+                                  final invNo = (item['invoice_no'] ??
+                                          item['id_ref'] ??
+                                          '')
+                                      .toString()
+                                      .trim();
                                   if (orderId > 0) {
                                     await DatabaseHelper.instance
                                         .updateTransaction(
                                             orderId, {'status': 'Selesai'});
-                                    final invNo = (item['invoice_no'] ?? item['id_ref'] ?? '').toString();
+                                  }
+                                  if (invNo.isNotEmpty) {
+                                    try {
+                                      final db = await DatabaseHelper
+                                          .instance.database;
+                                      await db.update(
+                                        'transactions',
+                                        {'status': 'Selesai'},
+                                        where:
+                                            'invoice_no = ? OR invoice_no = ?',
+                                        whereArgs: [
+                                          invNo,
+                                          invNo.replaceAll('INV-', '')
+                                        ],
+                                      );
+                                    } catch (_) {}
+                                  }
+                                  try {
                                     await FirebaseTransactionService.instance
                                         .updateTransactionInFirebase(
-                                      localId: orderId,
+                                      localId:
+                                          orderId > 0 ? orderId : null,
                                       invoiceNo: invNo,
                                       updatedData: {'status': 'Selesai'},
                                     );
-                                    if (!mounted) return;
-                                    setState(() {});
-                                  }
+                                  } catch (_) {}
+                                  if (!mounted) return;
+                                  setState(() {
+                                    _historyReloadKey++;
+                                  });
                                 },
                               ),
                             if (_isAdmin)
                               IconButton(
-                                icon: const Icon(Icons.delete, color: Colors.red),
+                                icon: const Icon(Icons.delete,
+                                    color: Colors.red),
                                 tooltip: LanguageService.text(
-                                    'Hapus Transaksi', 'Delete Transaction'),
-                                onPressed: () async {
-                                  final orderId =
-                                      (item['id'] as num?)?.toInt() ?? 0;
-                                  if (orderId > 0) {
-                                    final invNo = (item['invoice_no'] ?? item['id_ref'] ?? '').toString();
-                                    await DatabaseHelper.instance
-                                        .deleteTransaction(orderId, invoiceNo: invNo);
-                                    await FirebaseTransactionService.instance
-                                        .deleteTransactionFromFirebase(
-                                      localId: orderId,
-                                      invoiceNo: invNo,
-                                    );
-                                    if (!mounted) return;
-                                    setState(() {});
-                                  }
-                                },
+                                    'Hapus Transaksi',
+                                    'Delete Transaction'),
+                                onPressed: () =>
+                                    _showDeleteTransactionDialog(item),
                               ),
                           ],
                         ),

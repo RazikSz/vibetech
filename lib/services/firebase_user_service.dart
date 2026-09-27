@@ -155,16 +155,33 @@ class FirebaseUserService {
     // 1. Akun pengguna resmi dan nyata TIDAK BOLEH dianggap dummy
     if (email == 'admin@vibetech.com' ||
         email == 'admin@vibetech.xyz' ||
+        email == 'razikrdtya@gmail.com' ||
+        email == 'buloyoga@gmail.com' ||
+        email == 'zhillyhilmansyah@gmail.com' ||
+        email == 'mcdandigaming@gmail.com' ||
+        email == 'agus1@gmail.com' ||
+        email == 'alfiandisha@gmail.com' ||
+        email == 'fiqri9841@gmail.com' ||
+        email == 'levscerl@gmail.com' ||
+        email == 'raziksz@gmail.com' ||
+        email == 'tes@gmail.com' ||
+        email == 'zhil@gmail.com' ||
+        email == 'test@gmail.com' ||
+        email == 'raziek.official@gmail.com' ||
         username == 'admin' ||
         username == 'raziek' ||
-        username == 'oooo' ||
-        username == 'agus' ||
+        username == 'razikrdtya' ||
+        username == 'buloyoga' ||
+        username == 'zhillyhilmansyah' ||
+        username == 'mcdandigaming' ||
+        username == 'agus01gaming' ||
         username == 'alfin' ||
         username == 'fiqri' ||
         username == 'jezgrn' ||
+        username == 'oooo' ||
+        username == 'raziekz' ||
+        username == 'test' ||
         username == 'zhil' ||
-        email == 'test@gmail.com' ||
-        email == 'raziek.official@gmail.com' ||
         username == 'raziek_pro' ||
         username == 'testuser') {
       return false;
@@ -184,6 +201,8 @@ class FirebaseUserService {
         email.startsWith('balance_') ||
         username.startsWith('merge_order_') ||
         email.startsWith('merge_order_') ||
+        username.startsWith('fresh_user_') ||
+        email.startsWith('fresh_user_') ||
         username.startsWith('sec_user_') ||
         email.startsWith('sec_user_') ||
         username.startsWith('test_edit_user') ||
@@ -204,7 +223,49 @@ class FirebaseUserService {
         nama.contains('dummy') ||
         email.contains('mock_user') ||
         nama.contains('budi santoso') ||
-        email.contains('budi.santoso')) {
+        email.contains('budi.santoso') ||
+        // Akun mock / dummy yang telah dihapus
+        username.contains('katherinehall') ||
+        email.contains('katherinehall') ||
+        nama.contains('katherine hall') ||
+        username.contains('bessieromero') ||
+        email.contains('bessieromero') ||
+        nama.contains('bessie romero') ||
+        username.contains('lightknight') ||
+        email.contains('lightknight') ||
+        nama.contains('light knight') ||
+        username.contains('riyaksxu') ||
+        email.contains('riyaksxu') ||
+        nama.contains('ronald matthews') ||
+        username.contains('courtneycasey') ||
+        email.contains('courtneycasey') ||
+        nama.contains('courtney casey') ||
+        username.contains('emilycastillo') ||
+        email.contains('emilycastillo') ||
+        nama.contains('emily castillo') ||
+        username.contains('nelsonhawkins') ||
+        email.contains('nelsonhawkins') ||
+        nama.contains('nelson hawkins') ||
+        username.contains('darrelberry') ||
+        email.contains('darrelberry') ||
+        nama.contains('darrel berry') ||
+        username.contains('jimmypayne') ||
+        email.contains('jimmypayne') ||
+        nama.contains('jimmy payne') ||
+        username.contains('levibates') ||
+        email.contains('levibates') ||
+        nama.contains('levi bates') ||
+        username.contains('phildunn') ||
+        email.contains('phildunn') ||
+        nama.contains('phil dunn') ||
+        username.contains('amyarnold') ||
+        email.contains('amyarnold') ||
+        nama.contains('amy arnold') ||
+        username.contains('francesmiller') ||
+        email.contains('francesmiller') ||
+        nama.contains('frances miller') ||
+        RegExp(r'_[0-9]{4,6}$').hasMatch(username) ||
+        RegExp(r'\.[0-9]{4,6}@gmail\.com$').hasMatch(email)) {
       return true;
     }
 
@@ -232,13 +293,9 @@ class FirebaseUserService {
         data['is2FA'] = (data['is2FA'] as num).toInt();
       }
 
-      // Normalisasi password & PIN: jangan pernah biarkan kosong atau hilang saat diunggah ke Firebase
-      if (data['password'] != null &&
-          data['password'].toString().trim().isNotEmpty) {
-        data['password'] =
-            SecurityHelper.hashPassword(data['password'].toString().trim());
-      } else {
-        // Ambil password dari database lokal jika tidak disertakan dalam payload
+      // Normalisasi password & PIN: pastikan selalu berupa teks biasa (plaintext) dan tanpa hash SHA
+      String? pass = data['password']?.toString().trim();
+      if (pass == null || pass.isEmpty) {
         try {
           final uEmail = data['email']?.toString().trim();
           final uName = data['username']?.toString().trim();
@@ -247,26 +304,39 @@ class FirebaseUserService {
             local = await DatabaseHelper.instance.getUserByEmail(uEmail);
           }
           if (local == null && uName != null && uName.isNotEmpty) {
-            local =
-                await DatabaseHelper.instance.getUserByEmailOrUsername(uName);
+            local = await DatabaseHelper.instance.getUserByEmailOrUsername(uName);
           }
-          if (local != null &&
-              local['password'] != null &&
-              local['password'].toString().trim().isNotEmpty) {
-            data['password'] = SecurityHelper.hashPassword(
-                local['password'].toString().trim());
-          } else if (uEmail == 'admin@vibetech.com' ||
-              uName == 'raziek' ||
-              data['role'] == 'admin') {
-            data['password'] = 'razieksz';
+          if (local != null && local['password'] != null) {
+            pass = local['password'].toString().trim();
           }
         } catch (_) {}
       }
 
-      if (data['pin'] != null && data['pin'].toString().trim().isNotEmpty) {
-        data['pin'] = SecurityHelper.hashPin(data['pin'].toString().trim());
-      } else {
-        // Ambil PIN dari database lokal jika tidak disertakan dalam payload
+      if (pass != null && pass.startsWith('vbt\$sha256\$')) {
+        final uEmail = (data['email'] ?? '').toString().toLowerCase();
+        final uName = (data['username'] ?? '').toString().toLowerCase();
+        if (uEmail == 'admin@vibetech.com' || uName == 'raziek' || uName == 'raziekz') {
+          pass = 'razieksz';
+        } else if (uName == 'agus01gaming') {
+          pass = 'agus12345';
+        } else if (uName == 'fiqri') {
+          pass = 'fiqri123';
+        } else if (uName == 'jezgrn') {
+          pass = 'ajeng123';
+        } else if (uName == 'oooo') {
+          pass = 'test123';
+        } else if (uName == 'test') {
+          pass = '1234567890';
+        } else if (data['authProvider'] == 'Google' || uEmail.endsWith('@gmail.com')) {
+          pass = 'google_oauth_pass';
+        } else {
+          pass = '12345678';
+        }
+      }
+      data['password'] = (pass != null && pass.isNotEmpty) ? pass : '12345678';
+
+      String? pin = data['pin']?.toString().trim();
+      if (pin == null || pin.isEmpty) {
         try {
           final uEmail = data['email']?.toString().trim();
           final uName = data['username']?.toString().trim();
@@ -275,19 +345,29 @@ class FirebaseUserService {
             local = await DatabaseHelper.instance.getUserByEmail(uEmail);
           }
           if (local == null && uName != null && uName.isNotEmpty) {
-            local =
-                await DatabaseHelper.instance.getUserByEmailOrUsername(uName);
+            local = await DatabaseHelper.instance.getUserByEmailOrUsername(uName);
           }
-          if (local != null &&
-              local['pin'] != null &&
-              local['pin'].toString().trim().isNotEmpty) {
-            data['pin'] =
-                SecurityHelper.hashPin(local['pin'].toString().trim());
-          } else {
-            data['pin'] = '123456';
+          if (local != null && local['pin'] != null) {
+            pin = local['pin'].toString().trim();
           }
         } catch (_) {}
       }
+
+      if (pin != null && pin.startsWith('vbt\$pin\$')) {
+        final uName = (data['username'] ?? '').toString().toLowerCase();
+        if (uName == 'alfin') {
+          pin = '336699';
+        } else if (uName == 'fiqri') {
+          pin = '180829';
+        } else if (uName == 'oooo') {
+          pin = '666666';
+        } else if (uName == 'zhil') {
+          pin = '258014';
+        } else {
+          pin = '123456';
+        }
+      }
+      data['pin'] = (pin != null && pin.isNotEmpty) ? pin : '123456';
 
       data['doc_id'] = docId;
       data['uid_ref'] = docId;
@@ -893,16 +973,20 @@ class FirebaseUserService {
                 }
                 if (userMap['pin'] != null &&
                     userMap['pin'].toString().isNotEmpty) {
-                  updateData['pin'] =
-                      SecurityHelper.hashPin(userMap['pin'].toString());
+                  String p = userMap['pin'].toString().trim();
+                  if (p.startsWith('vbt\$pin\$')) p = '123456';
+                  updateData['pin'] = p;
                 }
                 if (userMap['role'] != null) {
                   updateData['role'] = userMap['role'];
                 }
                 if (userMap['password'] != null &&
                     userMap['password'].toString().isNotEmpty) {
-                  updateData['password'] = SecurityHelper.hashPassword(
-                      userMap['password'].toString());
+                  String pass = userMap['password'].toString().trim();
+                  if (pass.startsWith('vbt\$sha256\$')) {
+                    pass = (userMap['role'] == 'admin' || userMap['username'] == 'raziek') ? 'razieksz' : '12345678';
+                  }
+                  updateData['password'] = pass;
                 }
                 if (userMap['is2FA'] != null) {
                   updateData['is2FA'] = (userMap['is2FA'] as num).toInt();
@@ -929,6 +1013,15 @@ class FirebaseUserService {
                 }
                 imported++;
               } else {
+                String insPass = (userMap['password'] ?? '').toString().trim();
+                if (insPass.isEmpty || insPass.startsWith('vbt\$sha256\$')) {
+                  insPass = ((userMap['role'] == 'admin' || username == 'raziek') ? 'razieksz' : '12345678');
+                }
+                String insPin = (userMap['pin'] ?? '').toString().trim();
+                if (insPin.isEmpty || insPin.startsWith('vbt\$pin\$')) {
+                  insPin = '123456';
+                }
+
                 final insertData = <String, dynamic>{
                   'uid': userMap['uid'] ??
                       'usr_${DateTime.now().millisecondsSinceEpoch}',
@@ -937,12 +1030,8 @@ class FirebaseUserService {
                       (email != null ? email.split('@').first : 'user'),
                   'email': email ?? '${username ?? 'user'}@vibetech.com',
                   'phone': userMap['phone'] ?? '',
-                  'password': userMap['password'] ??
-                      SecurityHelper.hashPassword(
-                          'vbt_vault_${DateTime.now().millisecondsSinceEpoch}'),
-                  'pin': userMap['pin'] != null
-                      ? SecurityHelper.hashPin(userMap['pin'].toString())
-                      : SecurityHelper.hashPin('123456'),
+                  'password': insPass,
+                  'pin': insPin,
                   'referralCode': userMap['referralCode'] ?? '',
                   'role': userMap['role'] ?? 'user',
                   'createdAt':
@@ -1064,17 +1153,23 @@ class FirebaseUserService {
         user['doc_id'] = docId;
         user['updated_at'] = DateTime.now().toIso8601String();
 
-        if (user['password'] == null ||
-            user['password'].toString().trim().isEmpty) {
+        String userPass = (user['password'] ?? '').toString().trim();
+        if (userPass.isEmpty || userPass.startsWith('vbt\$sha256\$')) {
           if ((user['email'] ?? '') == 'admin@vibetech.com' ||
               (user['username'] ?? '') == 'raziek' ||
               (user['role'] ?? '') == 'admin') {
-            user['password'] = 'razieksz';
+            userPass = 'razieksz';
+          } else {
+            userPass = '12345678';
           }
         }
-        if (user['pin'] == null || user['pin'].toString().trim().isEmpty) {
-          user['pin'] = '123456';
+        user['password'] = userPass;
+
+        String userPin = (user['pin'] ?? '').toString().trim();
+        if (userPin.isEmpty || userPin.startsWith('vbt\$pin\$')) {
+          userPin = '123456';
         }
+        user['pin'] = userPin;
 
         // Put ke RTDB via REST API
         try {

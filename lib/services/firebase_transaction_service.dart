@@ -545,6 +545,9 @@ class FirebaseTransactionService {
   }
 
   /// Menentukan ID Dokumen untuk layanan aktif yang terurut rapi berdasarkan nomor, user, dan produk
+  String resolveServiceDocId(Map<String, dynamic> data, {int? orderIndex}) =>
+      _resolveServiceDocId(data, orderIndex: orderIndex);
+
   String _resolveServiceDocId(Map<String, dynamic> data, {int? orderIndex}) {
     final username = (data['username'] ?? data['user_email'] ?? 'user')
         .toString()

@@ -4,6 +4,7 @@ import 'package:vibetech_xyz/services/balance_service.dart';
 import 'package:vibetech_xyz/services/firebase_email_service.dart';
 import 'package:vibetech_xyz/services/firebase_product_service.dart';
 import 'package:vibetech_xyz/services/firebase_realtime_listener_service.dart';
+import 'package:vibetech_xyz/services/firebase_ticket_service.dart';
 import 'package:vibetech_xyz/services/firebase_transaction_service.dart';
 import 'package:vibetech_xyz/services/firebase_user_service.dart';
 
@@ -37,6 +38,7 @@ class CloudSyncService {
         FirebaseProductService.instance.syncProductsFromFirebase(),
         FirebaseTransactionService.instance.syncServicesFromFirebase(),
         FirebaseEmailService.instance.syncEmailSettings(),
+        FirebaseTicketService.instance.syncTicketsFromFirebase(),
       ]).timeout(const Duration(seconds: 6), onTimeout: () => []);
 
       // 2. Sinkronkan saldo akun yang sedang aktif di runtime
@@ -81,6 +83,8 @@ class CloudSyncService {
       FirebaseRealtimeListenerService.instance.transactionsUpdateCount;
   ValueNotifier<int> get servicesNotifier =>
       FirebaseRealtimeListenerService.instance.servicesUpdateCount;
+  ValueNotifier<int> get ticketsNotifier =>
+      FirebaseTicketService.instance.ticketsUpdateNotifier;
 
   /// Memulai sinkronisasi awal dan mengaktifkan continuous real-time streaming listener secara non-blocking
   Future<void> startRealtimeSync() async {

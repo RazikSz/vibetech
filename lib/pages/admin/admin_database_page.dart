@@ -6555,9 +6555,10 @@ class _UserPurchaseHistorySheetState extends State<_UserPurchaseHistorySheet>
 
   // 4. Dialog Hapus Layanan Aktif
   void _showDeleteServiceDialog(Map<String, dynamic> srv) {
-    final int id = srv['id'] as int;
+    final int id = (srv['id'] as num?)?.toInt() ?? int.tryParse(srv['id']?.toString() ?? '') ?? 0;
     final String nama = srv['nama_produk']?.toString() ?? 'Layanan';
     final String ip = srv['ip_address']?.toString() ?? '-';
+    final String userEmail = srv['user_email']?.toString() ?? '';
 
     showDialog(
       context: context,
@@ -6600,7 +6601,16 @@ class _UserPurchaseHistorySheetState extends State<_UserPurchaseHistorySheet>
             ),
             ElevatedButton(
               onPressed: () async {
-                await DatabaseHelper.instance.deleteService(id);
+                if (id > 0) {
+                  await DatabaseHelper.instance.deleteService(id);
+                }
+                final docId = FirebaseTransactionService.instance.resolveServiceDocId(srv);
+                await FirebaseTransactionService.instance.deleteServiceFromFirebase(
+                  id,
+                  docId: docId,
+                  namaProduk: nama,
+                  userEmail: userEmail,
+                );
                 if (context.mounted) Navigator.pop(context);
                 _showSnackBar(
                   LanguageService.text(

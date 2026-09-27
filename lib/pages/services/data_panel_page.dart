@@ -11,6 +11,7 @@ import '../../models/service_model.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../services/firebase_transaction_service.dart';
 import '../../services/language_service.dart';
+import '../../widgets/server_telemetry_widget.dart';
 import '../home/produk_page.dart';
 
 /// ============================================================================
@@ -101,9 +102,11 @@ class _DataPanelPageState extends State<DataPanelPage> {
   Future<void> _loadPanelData() async {
     if (!mounted) return;
     try {
-      final raw = await DatabaseHelper.instance
-          .getServicesByCategory(_activeEmail, 'Panel Hosting')
-          .timeout(const Duration(seconds: 4), onTimeout: () => []);
+      final raw = _isAdmin
+          ? await DatabaseHelper.instance
+              .getAllServicesByCategory('Panel Hosting')
+          : await DatabaseHelper.instance
+              .getServicesByCategory(_activeEmail, 'Panel Hosting');
       if (mounted) {
         setState(() {
           _panelList = raw.map((e) => PurchasedService.fromMap(e)).toList();
@@ -253,7 +256,7 @@ class _DataPanelPageState extends State<DataPanelPage> {
     );
   }
 
-  void _showDeleteConfirmDialog(int id, String name) {
+  void _showDeleteConfirmDialog(PurchasedService panel) {
     if (!_isAdmin) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -279,8 +282,8 @@ class _DataPanelPageState extends State<DataPanelPage> {
         ),
         content: Text(
           LanguageService.text(
-              'Apakah Anda yakin ingin menghapus $name dari daftar layanan?',
-              'Are you sure you want to delete $name from your services?'),
+              'Apakah Anda yakin ingin menghapus ${panel.namaProduk} dari daftar layanan?',
+              'Are you sure you want to delete ${panel.namaProduk} from your services?'),
           style: GoogleFonts.poppins(color: _textSecondary),
         ),
         actions: [
@@ -296,15 +299,36 @@ class _DataPanelPageState extends State<DataPanelPage> {
                   borderRadius: BorderRadius.circular(12)),
             ),
             onPressed: () async {
-              await DatabaseHelper.instance.deleteService(id);
-              await FirebaseTransactionService.instance.deleteServiceFromFirebase(
-                id,
-                namaProduk: name,
-                userEmail: _activeEmail,
-              );
-              if (!ctx.mounted) return;
               Navigator.pop(ctx);
-              _loadPanelData();
+              setState(() {
+                _panelList.removeWhere((s) => s.id == panel.id);
+              });
+              HapticFeedback.mediumImpact();
+              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    LanguageService.text(
+                      'Data Panel "${panel.namaProduk}" berhasil dihapus!',
+                      'Panel "${panel.namaProduk}" deleted successfully!',
+                    ),
+                    style: GoogleFonts.poppins(color: Colors.white),
+                  ),
+                  backgroundColor: AppColors.error,
+                  behavior: SnackBarBehavior.floating,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+
+              final docId = FirebaseTransactionService.instance.resolveServiceDocId(panel.toMap());
+              await DatabaseHelper.instance.deleteService(panel.id ?? 0);
+              await FirebaseTransactionService.instance.deleteServiceFromFirebase(
+                panel.id ?? 0,
+                docId: docId,
+                namaProduk: panel.namaProduk,
+                userEmail: panel.userEmail,
+              );
             },
             child: Text(LanguageService.tr('hapus'),
                 style: GoogleFonts.poppins(
@@ -353,6 +377,32 @@ class _DataPanelPageState extends State<DataPanelPage> {
               color: _textPrimary, fontWeight: FontWeight.bold, fontSize: 18),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.sync_rounded, color: AppColors.accent),
+            onPressed: () async {
+              await FirebaseTransactionService.instance
+                  .syncServicesFromFirebase(userEmail: _isAdmin ? null : _activeEmail);
+              await _loadPanelData();
+              if (!context.mounted) return;
+              HapticFeedback.lightImpact();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    LanguageService.text(
+                      'Data Panel berhasil disinkronkan dari Firebase Realtime Database!',
+                      'Panel data synced from Firebase Realtime Database!',
+                    ),
+                    style: GoogleFonts.poppins(color: Colors.white),
+                  ),
+                  backgroundColor: AppColors.emerald,
+                  behavior: SnackBarBehavior.floating,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            },
+            tooltip: LanguageService.text('Sinkronkan dari Firebase', 'Sync from Firebase'),
+          ),
           if (_isAdmin)
             IconButton(
               icon: const Icon(Icons.add_circle_outline_rounded,
@@ -711,6 +761,47 @@ class _DataPanelPageState extends State<DataPanelPage> {
                   ),
                 const SizedBox(height: 14),
 
+                // Live Server Telemetry & Health Monitoring
+                ServerTelemetryWidget(
+                  service: panel,
+                  isDarkMode: widget.isDarkMode,
+                  isCompact: true,
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => ServerTelemetryWidget.show(
+                      context,
+                      service: panel,
+                      isDarkMode: widget.isDarkMode,
+                    ),
+                    icon: const Icon(Icons.analytics_outlined, size: 16),
+                    label: Text(
+                      LanguageService.text(
+                        'Detail Telemetri Node & Reboot',
+                        'Detailed Node Telemetry & Reboot',
+                      ),
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: widget.isDarkMode ? AppColors.cyan : AppColors.primary,
+                      side: BorderSide(
+                        color: (widget.isDarkMode ? AppColors.cyan : AppColors.primary)
+                            .withValues(alpha: 0.4),
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+
                 // Expiry & Actions
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -746,8 +837,7 @@ class _DataPanelPageState extends State<DataPanelPage> {
                           IconButton(
                             icon: const Icon(Icons.delete_outline_rounded,
                                 color: AppColors.error, size: 20),
-                            onPressed: () => _showDeleteConfirmDialog(
-                                panel.id ?? 0, panel.namaProduk),
+                            onPressed: () => _showDeleteConfirmDialog(panel),
                             tooltip: LanguageService.tr('hapus'),
                           ),
                         ],

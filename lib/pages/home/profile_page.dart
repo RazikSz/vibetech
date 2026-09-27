@@ -18,6 +18,7 @@ import 'package:vibetech_xyz/services/language_service.dart';
 import 'package:vibetech_xyz/services/notification_service.dart';
 import 'package:vibetech_xyz/services/theme_service.dart';
 import 'package:vibetech_xyz/utils/security_helper.dart';
+import 'package:vibetech_xyz/pages/home/referral_program_page.dart';
 
 /// ============================================================================
 /// HALAMAN PROFIL & PENGATURAN AKUN (PROFILE PAGE)
@@ -492,6 +493,10 @@ class _ProfilePageState extends State<ProfilePage>
 
                     // --- STATS ROW ---
                     _buildStaggeredItem(_buildStatsRow(), 1),
+                    const SizedBox(height: 20),
+
+                    // --- PROGRAM REFERRAL & KEMITRAAN RESELLER ---
+                    _buildStaggeredItem(_buildReferralTierCard(), 2),
                     const SizedBox(height: 28),
 
                     // --- INFORMASI AKUN ---
@@ -804,6 +809,126 @@ class _ProfilePageState extends State<ProfilePage>
           ),
         ),
       ],
+    );
+  }
+
+  // =====================================================
+  // ===         REFERRAL & RESELLER TIER CARD         ===
+  // =====================================================
+  Widget _buildReferralTierCard() {
+    return _buildBounceTap(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ReferralProgramPage(
+              userEmail: _email,
+              username: _displayName,
+              isDarkMode: _isDarkMode,
+            ),
+          ),
+        ).then((_) => _loadUserDataFromDB());
+      },
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          gradient: LinearGradient(
+            colors: _isDarkMode
+                ? [
+                    const Color(0xFF1E1B4B),
+                    const Color(0xFF312E81),
+                    const Color(0xFF1E293B),
+                  ]
+                : [
+                    const Color(0xFFEEF2FF),
+                    const Color(0xFFE0E7FF),
+                    Colors.white,
+                  ],
+          ),
+          border: Border.all(
+            color: const Color(0xFF7C4DFF).withValues(alpha: _isDarkMode ? 0.5 : 0.3),
+            width: 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF7C4DFF).withValues(alpha: 0.15),
+              blurRadius: 15,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF7C4DFF), Color(0xFF4F46E5)],
+                ),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: const Icon(
+                Icons.workspace_premium_rounded,
+                color: Colors.white,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        'Kemitraan & Referral',
+                        style: GoogleFonts.poppins(
+                          color: _textPrimary,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: const Color(0xFF10B981), width: 0.8),
+                        ),
+                        child: Text(
+                          'KOMISI 15%',
+                          style: GoogleFonts.poppins(
+                            color: const Color(0xFF10B981),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Klaim bonus saldo otomatis & nikmati benefit Reseller Tier',
+                    style: GoogleFonts.poppins(
+                      color: _textSecondary,
+                      fontSize: 11,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            const Icon(
+              Icons.arrow_forward_ios_rounded,
+              color: Color(0xFF7C4DFF),
+              size: 16,
+            ),
+          ],
+        ),
+      ),
     );
   }
 

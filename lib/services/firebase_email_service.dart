@@ -210,7 +210,18 @@ class FirebaseEmailService {
       }
     } catch (_) {}
 
-    // --- 4. SIMPAN KE RUNTIME SHAREDPREFERENCES ---
+    // --- 4. SIMPAN KE SQLITE LOKAL & SHAREDPREFERENCES ---
+    try {
+      await DatabaseHelper.instance.saveEmailSettings(
+        smtpUser: cleanUser,
+        smtpPass: cleanPass,
+        smtpHost: cleanHost,
+        smtpPort: smtpPort,
+        userEmail: userEmail,
+        syncToCloud: false,
+      );
+    } catch (_) {}
+
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('smtp_user', cleanUser);

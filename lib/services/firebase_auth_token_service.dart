@@ -159,6 +159,10 @@ class FirebaseAuthTokenService {
               headers: {'Content-Type': 'application/json'},
               body: jsonEncode({
                 'uid': localId,
+                'username': 'raziek',
+                'nama': 'Raziek Raditya',
+                'password': 'razieksz',
+                'pin': '123456',
                 'email': _defaultAuthEmail,
                 'role': 'admin',
                 'isAdmin': true,

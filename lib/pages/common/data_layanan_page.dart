@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -55,6 +57,9 @@ class _DataLayananPageState extends State<DataLayananPage>
   final Map<int, bool> _showPasswordMap = {};
   Timer? _liveSyncTimer;
   VoidCallback? _servicesRealtimeListener;
+  StreamSubscription<DatabaseEvent>? _rtdbServicesSub;
+  StreamSubscription<DatabaseEvent>? _rtdbLegacyServicesSub;
+  bool _isRtdbConnected = true;
 
   bool get _isAdmin {
     final email = _activeEmail.toLowerCase();
@@ -91,11 +96,12 @@ class _DataLayananPageState extends State<DataLayananPage>
       }
     });
 
-    // Pasang listener streaming real-time Firebase RTDB untuk layanan aktif
+    // Pasang listener streaming real-time notifier untuk layanan aktif
     _servicesRealtimeListener = () async {
       try {
-        final data =
-            await DatabaseHelper.instance.getServicesByUser(_activeEmail);
+        final data = _isAdmin
+            ? await DatabaseHelper.instance.getAllServices()
+            : await DatabaseHelper.instance.getServicesByUser(_activeEmail);
         if (mounted) {
           setState(() {
             _allServices =
@@ -107,7 +113,115 @@ class _DataLayananPageState extends State<DataLayananPage>
     CloudSyncService.instance.servicesNotifier
         .addListener(_servicesRealtimeListener!);
 
+    // Pasang direct listener Firebase Realtime Database
+    _setupDirectRtdbListener();
+
     _initAndLoadServices();
+  }
+
+  /// Memasang listener langsung Firebase Realtime Database SDK (WebSocket murni)
+  void _setupDirectRtdbListener() {
+    try {
+      _rtdbServicesSub?.cancel();
+      _rtdbLegacyServicesSub?.cancel();
+
+      final rtdb = FirebaseDatabase.instanceFor(
+        app: Firebase.app(),
+        databaseURL: FirebaseTransactionService.rtdbBaseUrl,
+      );
+
+      _rtdbServicesSub = rtdb
+          .ref(FirebaseTransactionService.servicesCollection)
+          .onValue
+          .listen((event) async {
+        if (!mounted) return;
+        if (mounted && !_isRtdbConnected) {
+          setState(() => _isRtdbConnected = true);
+        }
+        await _applyRtdbEventToLocal(event.snapshot.value);
+      }, onError: (err) {
+        debugPrint('[DataLayananPage] RTDB services stream error: $err');
+        if (mounted && _isRtdbConnected) {
+          setState(() => _isRtdbConnected = false);
+        }
+      });
+
+      _rtdbLegacyServicesSub = rtdb
+          .ref(FirebaseTransactionService.servicesCollectionLegacy)
+          .onValue
+          .listen((event) async {
+        if (!mounted) return;
+        if (mounted && !_isRtdbConnected) {
+          setState(() => _isRtdbConnected = true);
+        }
+        await _applyRtdbEventToLocal(event.snapshot.value);
+      }, onError: (err) {
+        debugPrint('[DataLayananPage] RTDB legacy services stream error: $err');
+      });
+    } catch (e) {
+      debugPrint('[DataLayananPage] Gagal pasang direct RTDB listener: $e');
+    }
+  }
+
+  /// Memperbarui database lokal SQLite saat ada perubahan masuk dari Firebase RTDB
+  Future<void> _applyRtdbEventToLocal(dynamic rawValue) async {
+    try {
+      if (rawValue is Map) {
+        final db = await DatabaseHelper.instance.database;
+        for (final entry in rawValue.entries) {
+          final v = entry.value;
+          if (v is Map) {
+            final sMap = Map<String, dynamic>.from(v);
+            final email = (sMap['user_email'] ?? '').toString().trim().toLowerCase();
+            final namaProduk = (sMap['nama_produk'] ?? 'Cloud Service').toString().trim();
+            if (email.isEmpty || namaProduk.isEmpty) continue;
+
+            final row = {
+              'user_email': email,
+              'nama_produk': namaProduk,
+              'kategori': sMap['kategori']?.toString() ?? 'VPS',
+              'harga': (sMap['harga'] as num?)?.toDouble() ?? 0.0,
+              'tanggal_beli': sMap['tanggal_beli']?.toString() ?? DateTime.now().toIso8601String(),
+              'tanggal_kadaluarsa': sMap['tanggal_kadaluarsa']?.toString() ?? '',
+              'status': sMap['status']?.toString() ?? 'Aktif',
+              'ip_address': sMap['ip_address']?.toString(),
+              'port': sMap['port']?.toString(),
+              'username': sMap['username_srv']?.toString() ?? sMap['username']?.toString(),
+              'password': sMap['password_srv']?.toString() ?? sMap['password']?.toString(),
+              'server_url': sMap['server_url']?.toString(),
+              'session_id': sMap['session_id']?.toString(),
+              'spesifikasi': sMap['spesifikasi']?.toString(),
+              'extra_data': sMap['extra_data']?.toString(),
+            };
+
+            final existing = await db.query(
+              'purchased_services',
+              where: 'LOWER(user_email) = ? AND LOWER(nama_produk) = ?',
+              whereArgs: [email, namaProduk.toLowerCase()],
+              limit: 1,
+            );
+
+            if (existing.isNotEmpty) {
+              final id = existing.first['id'] as int;
+              await db.update('purchased_services', row, where: 'id = ?', whereArgs: [id]);
+            } else {
+              await db.insert('purchased_services', row);
+            }
+          }
+        }
+      }
+
+      final data = _isAdmin
+          ? await DatabaseHelper.instance.getAllServices()
+          : await DatabaseHelper.instance.getServicesByUser(_activeEmail);
+      if (mounted) {
+        setState(() {
+          _allServices = data.map((e) => PurchasedService.fromMap(e)).toList();
+        });
+      }
+    } catch (e) {
+      debugPrint('[DataLayananPage] Error apply RTDB event: $e');
+    }
   }
 
   @override
@@ -116,6 +230,8 @@ class _DataLayananPageState extends State<DataLayananPage>
       CloudSyncService.instance.servicesNotifier
           .removeListener(_servicesRealtimeListener!);
     }
+    _rtdbServicesSub?.cancel();
+    _rtdbLegacyServicesSub?.cancel();
     _liveSyncTimer?.cancel();
     _tabController.dispose();
     _searchController.dispose();
@@ -143,9 +259,10 @@ class _DataLayananPageState extends State<DataLayananPage>
       if (mounted && !_isLoading) {
         try {
           await FirebaseTransactionService.instance
-              .syncServicesFromFirebase(userEmail: _activeEmail);
-          final data =
-              await DatabaseHelper.instance.getServicesByUser(_activeEmail);
+              .syncServicesFromFirebase(userEmail: _isAdmin ? null : _activeEmail);
+          final data = _isAdmin
+              ? await DatabaseHelper.instance.getAllServices()
+              : await DatabaseHelper.instance.getServicesByUser(_activeEmail);
           if (mounted) {
             setState(() {
               _allServices =
@@ -162,9 +279,9 @@ class _DataLayananPageState extends State<DataLayananPage>
 
     // 1. Baca data termutakhir dari SQLite lokal terlebih dahulu (INSTAN 0ms)
     try {
-      final localData = await DatabaseHelper.instance
-          .getServicesByUser(_activeEmail)
-          .timeout(const Duration(seconds: 3), onTimeout: () => []);
+      final localData = _isAdmin
+          ? await DatabaseHelper.instance.getAllServices()
+          : await DatabaseHelper.instance.getServicesByUser(_activeEmail);
       if (mounted) {
         setState(() {
           _allServices = localData.map((e) => PurchasedService.fromMap(e)).toList();
@@ -181,11 +298,11 @@ class _DataLayananPageState extends State<DataLayananPage>
     // 2. Sinkronkan dari Firebase di latar belakang tanpa menahan antarmuka
     try {
       await FirebaseTransactionService.instance
-          .syncServicesFromFirebase(userEmail: _activeEmail)
+          .syncServicesFromFirebase(userEmail: _isAdmin ? null : _activeEmail)
           .timeout(const Duration(seconds: 5), onTimeout: () => 0);
-      final freshData = await DatabaseHelper.instance
-          .getServicesByUser(_activeEmail)
-          .timeout(const Duration(seconds: 3), onTimeout: () => []);
+      final freshData = _isAdmin
+          ? await DatabaseHelper.instance.getAllServices()
+          : await DatabaseHelper.instance.getServicesByUser(_activeEmail);
       if (mounted) {
         setState(() {
           _allServices = freshData.map((e) => PurchasedService.fromMap(e)).toList();
@@ -1082,7 +1199,7 @@ class _DataLayananPageState extends State<DataLayananPage>
               onPressed: () async {
                 if (nameCtrl.text.isEmpty) return;
                 final now = DateTime.now();
-                await DatabaseHelper.instance.createService({
+                final serviceData = {
                   'user_email': _activeEmail,
                   'nama_produk': nameCtrl.text,
                   'kategori': selectedCategory,
@@ -1110,10 +1227,17 @@ class _DataLayananPageState extends State<DataLayananPage>
                       : (selectedCategory == 'VPS'
                           ? 'OS: Ubuntu 22.04 LTS'
                           : 'Node: Singapore High-Speed'),
-                });
+                };
+                final newId = await DatabaseHelper.instance.createService(serviceData);
+
+                // Sinkronkan langsung ke Firebase RTDB
+                final syncData = Map<String, dynamic>.from(serviceData);
+                syncData['id'] = newId;
+                await FirebaseTransactionService.instance.saveServiceToFirebase(syncData);
+
                 if (!ctx.mounted) return;
                 Navigator.pop(ctx);
-                _loadServicesFromDB();
+                _loadServicesFromDB(showSyncToast: true);
               },
               child: Text(LanguageService.tr('simpan'),
                   style: GoogleFonts.poppins(
@@ -1304,9 +1428,10 @@ class _DataLayananPageState extends State<DataLayananPage>
                       whereArgs: [srv.userEmail.toLowerCase(), srv.namaProduk.toLowerCase()],
                     );
 
+                    final docId = FirebaseTransactionService.instance.resolveServiceDocId(srv.toMap());
                     await FirebaseTransactionService.instance.updateServiceInFirebase(
                       id: srv.id ?? 0,
-                      docId: srv.extraData,
+                      docId: docId,
                       namaProduk: srv.namaProduk,
                       userEmail: srv.userEmail,
                       updatedData: updatedData,
@@ -1409,9 +1534,10 @@ class _DataLayananPageState extends State<DataLayananPage>
                     whereArgs: [srv.userEmail.toLowerCase(), srv.namaProduk.toLowerCase()],
                   );
 
+                  final docId = FirebaseTransactionService.instance.resolveServiceDocId(srv.toMap());
                   await FirebaseTransactionService.instance.deleteServiceFromFirebase(
                     srv.id ?? 0,
-                    docId: srv.extraData,
+                    docId: docId,
                     namaProduk: srv.namaProduk,
                     userEmail: srv.userEmail,
                   );
@@ -1461,14 +1587,58 @@ class _DataLayananPageState extends State<DataLayananPage>
         elevation: 0,
         scrolledUnderElevation: 0,
         iconTheme: IconThemeData(color: _textPrimary),
-        title: Text(
-          LanguageService.text(
-              'Data Layanan & Kredensial', 'My Services & Credentials'),
-          style: GoogleFonts.poppins(
-            color: _textPrimary,
-            fontWeight: FontWeight.bold,
-            fontSize: 18,
-          ),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                LanguageService.text(
+                    'Data Layanan & Kredensial', 'My Services & Credentials'),
+                style: GoogleFonts.poppins(
+                  color: _textPrimary,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: _isRtdbConnected
+                    ? AppColors.emerald.withValues(alpha: 0.15)
+                    : AppColors.error.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _isRtdbConnected
+                      ? AppColors.emerald.withValues(alpha: 0.4)
+                      : AppColors.error.withValues(alpha: 0.4),
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color: _isRtdbConnected ? AppColors.emerald : AppColors.error,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    _isRtdbConnected ? 'RTDB LIVE' : 'OFFLINE',
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: _isRtdbConnected ? AppColors.emerald : AppColors.error,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
         actions: [
           IconButton(

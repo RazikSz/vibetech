@@ -100,9 +100,11 @@ class _DataBotWaPageState extends State<DataBotWaPage> {
   Future<void> _loadBotData() async {
     if (!mounted) return;
     try {
-      final raw = await DatabaseHelper.instance
-          .getServicesByCategory(_activeEmail, 'Bot WhatsApp')
-          .timeout(const Duration(seconds: 4), onTimeout: () => []);
+      final raw = _isAdmin
+          ? await DatabaseHelper.instance
+              .getAllServicesByCategory('Bot WhatsApp')
+          : await DatabaseHelper.instance
+              .getServicesByCategory(_activeEmail, 'Bot WhatsApp');
       if (mounted) {
         setState(() {
           _botList = raw.map((e) => PurchasedService.fromMap(e)).toList();
@@ -358,7 +360,7 @@ class _DataBotWaPageState extends State<DataBotWaPage> {
     );
   }
 
-  void _showDeleteConfirmDialog(int id, String name) {
+  void _showDeleteConfirmDialog(PurchasedService bot) {
     if (!_isAdmin) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -384,8 +386,8 @@ class _DataBotWaPageState extends State<DataBotWaPage> {
         ),
         content: Text(
           LanguageService.text(
-              'Apakah Anda yakin ingin menghapus $name dari daftar layanan?',
-              'Are you sure you want to delete $name from your services?'),
+              'Apakah Anda yakin ingin menghapus ${bot.namaProduk} dari daftar layanan?',
+              'Are you sure you want to delete ${bot.namaProduk} from your services?'),
           style: GoogleFonts.poppins(color: _textSecondary),
         ),
         actions: [
@@ -401,15 +403,36 @@ class _DataBotWaPageState extends State<DataBotWaPage> {
                   borderRadius: BorderRadius.circular(12)),
             ),
             onPressed: () async {
-              await DatabaseHelper.instance.deleteService(id);
-              await FirebaseTransactionService.instance.deleteServiceFromFirebase(
-                id,
-                namaProduk: name,
-                userEmail: _activeEmail,
-              );
-              if (!ctx.mounted) return;
               Navigator.pop(ctx);
-              _loadBotData();
+              setState(() {
+                _botList.removeWhere((s) => s.id == bot.id);
+              });
+              HapticFeedback.mediumImpact();
+              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    LanguageService.text(
+                      'Data Bot WA "${bot.namaProduk}" berhasil dihapus!',
+                      'WhatsApp Bot "${bot.namaProduk}" deleted successfully!',
+                    ),
+                    style: GoogleFonts.poppins(color: Colors.white),
+                  ),
+                  backgroundColor: AppColors.error,
+                  behavior: SnackBarBehavior.floating,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+
+              final docId = FirebaseTransactionService.instance.resolveServiceDocId(bot.toMap());
+              await DatabaseHelper.instance.deleteService(bot.id ?? 0);
+              await FirebaseTransactionService.instance.deleteServiceFromFirebase(
+                bot.id ?? 0,
+                docId: docId,
+                namaProduk: bot.namaProduk,
+                userEmail: bot.userEmail,
+              );
             },
             child: Text(LanguageService.tr('hapus'),
                 style: GoogleFonts.poppins(
@@ -458,6 +481,32 @@ class _DataBotWaPageState extends State<DataBotWaPage> {
               color: _textPrimary, fontWeight: FontWeight.bold, fontSize: 18),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.sync_rounded, color: AppColors.accent),
+            onPressed: () async {
+              await FirebaseTransactionService.instance
+                  .syncServicesFromFirebase(userEmail: _isAdmin ? null : _activeEmail);
+              await _loadBotData();
+              if (!context.mounted) return;
+              HapticFeedback.lightImpact();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    LanguageService.text(
+                      'Data Bot WA berhasil disinkronkan dari Firebase Realtime Database!',
+                      'WhatsApp Bot data synced from Firebase Realtime Database!',
+                    ),
+                    style: GoogleFonts.poppins(color: Colors.white),
+                  ),
+                  backgroundColor: AppColors.emerald,
+                  behavior: SnackBarBehavior.floating,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            },
+            tooltip: LanguageService.text('Sinkronkan dari Firebase', 'Sync from Firebase'),
+          ),
           if (_isAdmin)
             IconButton(
               icon: const Icon(Icons.add_circle_outline_rounded,
@@ -836,8 +885,7 @@ class _DataBotWaPageState extends State<DataBotWaPage> {
                           IconButton(
                             icon: const Icon(Icons.delete_outline_rounded,
                                 color: AppColors.error, size: 20),
-                            onPressed: () => _showDeleteConfirmDialog(
-                                bot.id ?? 0, bot.namaProduk),
+                            onPressed: () => _showDeleteConfirmDialog(bot),
                             tooltip: LanguageService.tr('hapus'),
                           ),
                         ],

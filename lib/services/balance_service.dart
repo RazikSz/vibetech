@@ -96,6 +96,18 @@ class BalanceService {
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_getKey(target), updated);
+
+    // Sync otomatis ke Firebase Realtime Database di background
+    Future.microtask(() async {
+      try {
+        await FirebaseUserService.instance.updateUserInFirebase(
+          email: target.contains('@') ? target : null,
+          username: !target.contains('@') ? target : null,
+          updatedData: {'saldo': updated.toDouble()},
+        );
+      } catch (_) {}
+    });
+
     return true;
   }
 
@@ -114,6 +126,17 @@ class BalanceService {
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_getKey(target), updated);
+
+    // Sync otomatis ke Firebase Realtime Database di background
+    Future.microtask(() async {
+      try {
+        await FirebaseUserService.instance.updateUserInFirebase(
+          email: target.contains('@') ? target : null,
+          username: !target.contains('@') ? target : null,
+          updatedData: {'saldo': updated.toDouble()},
+        );
+      } catch (_) {}
+    });
   }
 
   /// Mereset session saldo saat pengguna melakukan logout

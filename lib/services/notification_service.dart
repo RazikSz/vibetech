@@ -17,6 +17,7 @@ import 'package:vibetech_xyz/database/db_helper.dart';
 import 'package:vibetech_xyz/services/firebase_email_service.dart';
 import 'package:vibetech_xyz/services/language_service.dart';
 import 'package:vibetech_xyz/services/theme_service.dart';
+import 'package:vibetech_xyz/services/firebase_auth_token_service.dart';
 import 'package:vibetech_xyz/utils/security_helper.dart';
 
 /// ============================================================================
@@ -344,6 +345,144 @@ class NotificationService {
     } catch (e) {
       debugPrint('[NotificationService] Error showing system notification: $e');
     }
+  }
+
+  /// Sinkronisasi notifikasi ke Firebase Realtime Database
+  static Future<void> syncNotificationToFirebase(
+      String userEmail, Map<String, dynamic> notifData) async {
+    try {
+      final sanitizedEmail = userEmail.replaceAll(RegExp(r'[.\$#\[\]/]'), '_');
+      final notifId = notifData['order_id'] ?? 'NTF_${DateTime.now().millisecondsSinceEpoch}';
+      final cleanId = notifId.toString().replaceAll(RegExp(r'[.\$#\[\]/]'), '_');
+      final token = await FirebaseAuthTokenService.instance.getIdToken();
+      final authParam = (token != null && token.isNotEmpty) ? '?auth=$token' : '';
+      final url = Uri.parse(
+          'https://vibetech-xyz-default-rtdb.asia-southeast1.firebasedatabase.app/notifications/$sanitizedEmail/$cleanId.json$authParam');
+      await http.put(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(notifData),
+      ).timeout(const Duration(seconds: 4));
+    } catch (e) {
+      debugPrint('[NotificationService] Gagal sync notifikasi ke Firebase: $e');
+    }
+  }
+
+  /// Trigger Notifikasi Pembayaran Berhasil (Settlement & Verifikasi Lunas)
+  static Future<void> triggerPaymentSettlementNotification({
+    required String userEmail,
+    required String orderId,
+    required String productName,
+    required String amount,
+  }) async {
+    const title = 'Pembayaran Terverifikasi! Lunas ✅';
+    final body = 'Pesanan $productName ($orderId) sebesar $amount telah berhasil diverifikasi secara otomatis oleh sistem Midtrans.';
+    final nowIso = DateTime.now().toIso8601String();
+
+    await showSystemNotification(
+      title: title,
+      body: body,
+      category: 'Transaksi & Billing',
+      payload: orderId,
+    );
+
+    final notifMap = {
+      'user_email': userEmail,
+      'title': title,
+      'message': body,
+      'category': 'Transaksi & Billing',
+      'order_id': orderId,
+      'amount': amount,
+      'date_time': nowIso,
+      'is_read': 0,
+      'type': 'payment_settlement',
+      'sender': 'billing@vibetech.xyz',
+      'sender_name': 'Midtrans Payment Gateway',
+    };
+
+    try {
+      await DatabaseHelper.instance.insertNotification(notifMap);
+      await syncNotificationToFirebase(userEmail, notifMap);
+    } catch (_) {}
+  }
+
+  /// Trigger Notifikasi Pengingat Perpanjangan Server (H-3 dan H-1)
+  static Future<void> triggerExpiryReminderNotification({
+    required String userEmail,
+    required String serviceName,
+    required int daysLeft,
+  }) async {
+    final isUrgent = daysLeft <= 1;
+    final title = isUrgent
+        ? '⚠️ Peringatan: Masa Aktif Server Habis Besok!'
+        : '⏳ Pengingat: Masa Aktif $serviceName Tinggal $daysLeft Hari';
+    final body = isUrgent
+        ? 'Layanan $serviceName akan kedaluwarsa besok. Segera perpanjang masa aktif server Anda untuk mencegah pemutusan akses.'
+        : 'Masa aktif layanan $serviceName tersisa $daysLeft hari lagi. Lakukan perpanjangan tagihan di VibeTech XYZ.';
+    final nowIso = DateTime.now().toIso8601String();
+
+    await showSystemNotification(
+      title: title,
+      body: body,
+      category: 'Peringatan Sistem',
+      payload: serviceName,
+    );
+
+    final notifMap = {
+      'user_email': userEmail,
+      'title': title,
+      'message': body,
+      'category': 'Peringatan Sistem',
+      'order_id': 'REMINDER_${DateTime.now().millisecondsSinceEpoch.toString().substring(6)}',
+      'amount': null,
+      'date_time': nowIso,
+      'is_read': 0,
+      'type': 'expiry_reminder',
+      'sender': 'billing@vibetech.xyz',
+      'sender_name': 'VibeTech Automated Renewal',
+    };
+
+    try {
+      await DatabaseHelper.instance.insertNotification(notifMap);
+      await syncNotificationToFirebase(userEmail, notifMap);
+    } catch (_) {}
+  }
+
+  /// Trigger Notifikasi Promo Diskon & Kupon Baru
+  static Future<void> triggerPromoNotification({
+    required String userEmail,
+    required String promoTitle,
+    required String promoMessage,
+    String couponCode = 'VIBESERVER',
+  }) async {
+    final title = '🎉 $promoTitle (Kupon: $couponCode)';
+    final nowIso = DateTime.now().toIso8601String();
+
+    await showSystemNotification(
+      title: title,
+      body: promoMessage,
+      category: 'Promo & Diskon Eksklusif',
+      payload: couponCode,
+    );
+
+    final notifMap = {
+      'user_email': userEmail,
+      'title': title,
+      'message': promoMessage,
+      'category': 'Promo & Diskon Eksklusif',
+      'order_id': couponCode,
+      'amount': 'Diskon 30%',
+      'date_time': nowIso,
+      'is_read': 0,
+      'type': 'promo_coupon',
+      'sender': 'promo@vibetech.xyz',
+      'sender_name': 'VibeTech Marketing Team',
+    };
+
+    try {
+      await DatabaseHelper.instance.insertNotification(notifMap);
+      await syncNotificationToFirebase(userEmail, notifMap);
+    } catch (_) {}
   }
 
   /// Update pengaturan Push Notification

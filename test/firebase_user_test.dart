@@ -135,5 +135,50 @@ void main() {
       final cloudUser = await FirebaseUserService.instance.getUserFromFirebase(testUid);
       expect(cloudUser, isNull);
     });
+
+    test('FirebaseUserService filters Katherine, Bessie, Light Knight and mock users correctly', () {
+      final dummyAccounts = [
+        {'username': 'bessieromero_58141', 'email': 'bessieromero.58141@gmail.com', 'nama': 'Bessie Romero'},
+        {'username': 'katherinehall_66497', 'email': 'katherinehall.66497@gmail.com', 'nama': 'Katherine Hall'},
+        {'username': 'lightknight803', 'email': 'lightknight803@gmail.com', 'nama': 'Light Knight'},
+        {'username': 'riyaksxu139', 'email': 'riyaksxu139@gmail.com', 'nama': 'Ronald Matthews'},
+        {'username': 'courtneycasey_61051', 'email': 'courtneycasey.61051@gmail.com', 'nama': 'Courtney Casey'},
+        {'username': 'emilycastillo_19257', 'email': 'emilycastillo.19257@gmail.com', 'nama': 'Emily Castillo'},
+        {'username': 'nelsonhawkins_99627', 'email': 'nelsonhawkins.99627@gmail.com', 'nama': 'Nelson Hawkins'},
+        {'username': 'darrelberry_75389', 'email': 'darrelberry.75389@gmail.com', 'nama': 'Darrel Berry'},
+        {'username': 'jimmypayne_49788', 'email': 'jimmypayne.49788@gmail.com', 'nama': 'Jimmy Payne'},
+        {'username': 'levibates_15260', 'email': 'levibates.15260@gmail.com', 'nama': 'Levi Bates'},
+        {'username': 'phildunn_64437', 'email': 'phildunn.64437@gmail.com', 'nama': 'Phil Dunn'},
+        {'username': 'amyarnold_43895', 'email': 'amyarnold.43895@gmail.com', 'nama': 'Amy Arnold'},
+        {'username': 'francesmiller_99228', 'email': 'francesmiller.99228@gmail.com', 'nama': 'Frances Miller'},
+        {'username': 'fresh_user_1789369337077852', 'email': 'fresh_user_1789369337077852@vibetech.com', 'nama': 'Fresh User'},
+      ];
+
+      for (final acc in dummyAccounts) {
+        expect(FirebaseUserService.isDummyUser(acc), isTrue,
+            reason: '${acc['username']} should be identified as dummy');
+      }
+
+      final realAccounts = [
+        {'username': 'raziek', 'email': 'admin@vibetech.com', 'nama': 'Raziek Raditya'},
+        {'username': 'razikrdtya', 'email': 'razikrdtya@gmail.com', 'nama': 'Ahmad Raziek'},
+        {'username': 'buloyoga', 'email': 'buloyoga@gmail.com', 'nama': 'yoga bulo'},
+        {'username': 'zhillyhilmansyah', 'email': 'zhillyhilmansyah@gmail.com', 'nama': 'Zhilly Hilmansyah'},
+        {'username': 'mcdandigaming', 'email': 'mcdandigaming@gmail.com', 'nama': 'DANDI GAMING 4'},
+        {'username': 'agus01gaming', 'email': 'agus1@gmail.com', 'nama': 'agus'},
+        {'username': 'alfin', 'email': 'alfiandisha@gmail.com', 'nama': 'alfiandi'},
+        {'username': 'fiqri', 'email': 'fiqri9841@gmail.com', 'nama': 'M Fiqri Badri Tamam'},
+        {'username': 'jezgrn', 'email': 'levscerl@gmail.com', 'nama': 'Ajeng Putri'},
+        {'username': 'oooo', 'email': 'test@gmail.com', 'nama': 'pioi'},
+        {'username': 'raziekz', 'email': 'raziksz@gmail.com', 'nama': 'Ahmad Raziek'},
+        {'username': 'test', 'email': 'tes@gmail.com', 'nama': 'tes'},
+        {'username': 'zhil', 'email': 'zhil@gmail.com', 'nama': 'zhilsyah'},
+      ];
+
+      for (final acc in realAccounts) {
+        expect(FirebaseUserService.isDummyUser(acc), isFalse,
+            reason: '${acc['username']} should be identified as REAL user');
+      }
+    });
   });
 }
